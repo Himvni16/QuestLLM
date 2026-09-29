@@ -67,6 +67,9 @@ QUESTION_GENERATION_NUM_BEAMS = 4
 QUESTION_GENERATION_MAX_NEW_TOKENS = 64
 MINIMUM_QUESTION_CHARACTERS = 12
 MAXIMUM_QUESTION_CHARACTERS = 240
+FILL_IN_THE_BLANK_TOKEN = "________"
+QUESTION_TYPE_PREVIEW_LIMIT = 1
+MCQ_CHOICE_ORDER_SEED = 17
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ class AppSettings:
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
     question_generation_model_id: str = QUESTION_GENERATION_MODEL_ID
     question_preview_limit: int = QUESTION_PREVIEW_LIMIT
+    question_type_preview_limit: int = QUESTION_TYPE_PREVIEW_LIMIT
 
 
 def get_settings() -> AppSettings:

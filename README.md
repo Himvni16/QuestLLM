@@ -2,9 +2,10 @@
 
 QuestLLM is a local-first quiz generation application built with Python and Streamlit.
 
-Phase 5 supports pasted text and text-based PDF ingestion, sentence preprocessing,
-sentence-aware chunking, candidate-answer ranking, and local T5 question-stem previews. OCR,
-multiple-choice construction, quiz-taking, and scoring will be added incrementally in later phases.
+Phase 6 supports pasted text and text-based PDF ingestion, sentence preprocessing,
+candidate-answer ranking, local T5 question stems, and development previews for Multiple Choice,
+True/False, Fill-in-the-Blank, and Short Answer questions. Quiz-taking and scoring will be added
+incrementally in later phases.
 
 ## Local setup
 
@@ -29,6 +30,10 @@ otherwise on CPU. To explicitly test that model outside the UI (this may downloa
 ```powershell
 python scripts/smoke_test_model.py
 ```
+
+The question-type preview intentionally shows correct answers and source excerpts for development
+verification. QuestLLM skips an MCQ when it cannot find three defensible distractors rather than
+forcing weak choices.
 
 ## Quality checks
 

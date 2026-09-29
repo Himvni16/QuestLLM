@@ -9,6 +9,7 @@ from questllm.config import (
     APP_NAME,
     CHUNK_OVERLAP_SIZE,
     MODEL_CONTEXT_TOKEN_BUDGET,
+    QUESTION_TYPE_PREVIEW_LIMIT,
 )
 from questllm.document import Document
 from questllm.exceptions import QuestLLMError
@@ -16,6 +17,8 @@ from questllm.generation import QuestionPreviewService, T5QuestionGenerator
 from questllm.ingestion import ingest_pdf, ingest_text
 from questllm.model_loader import load_question_generation_model
 from questllm.preprocessing import ProcessedSentence, preprocess_document
+from questllm.question_builders import QuestionBuilderService
+from questllm.questions import Difficulty, Question, QuestionType
 
 st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="centered")
 
@@ -91,6 +94,30 @@ def show_question_preview() -> None:
             st.write(result.source_sentence)
 
 
+def show_question_type_preview(questions: tuple[Question, ...]) -> None:
+    """Render grouped development previews, deliberately including answers for verification."""
+
+    if not questions:
+        return
+    st.subheader("Question-type preview")
+    st.caption("Development preview: correct answers are shown for source verification.")
+    for question_type in QuestionType:
+        grouped = [question for question in questions if question.question_type is question_type]
+        if not grouped:
+            continue
+        st.markdown(f"#### {question_type.value}")
+        for question in grouped:
+            st.write(question.prompt)
+            if question.choices:
+                for choice in question.choices:
+                    st.write(f"- {choice.id[:8]}: {choice.text}")
+            st.write(f"Correct answer: `{question.correct_answer}`")
+            if question.page_number is not None:
+                st.caption(f"Source page {question.page_number}")
+            with st.expander("Source excerpt"):
+                st.write(question.source_excerpt)
+
+
 def process_document(document: Document) -> None:
     """Run the completed pre-generation workflow and retain it for the preview action."""
 
@@ -99,6 +126,7 @@ def process_document(document: Document) -> None:
     candidates = extract_and_rank_candidates(sentences)
     st.session_state["processed_content"] = (document, sentences, chunks, candidates)
     st.session_state.pop("question_preview", None)
+    st.session_state.pop("question_types_preview", None)
 
 
 source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
@@ -162,6 +190,53 @@ if processed_content:
 
     show_question_preview()
 
+    selected_type_labels = st.multiselect(
+        "Question types for preview",
+        options=[question_type.value for question_type in QuestionType],
+        default=[QuestionType.SHORT_ANSWER.value, QuestionType.FILL_IN_THE_BLANK.value],
+    )
+    selected_types = tuple(QuestionType(label) for label in selected_type_labels)
+    difficulty_label = st.selectbox("Difficulty", options=[level.value for level in Difficulty])
+    difficulty = Difficulty(difficulty_label)
+
+    if st.button("Generate Question Types Preview"):
+        if not selected_types:
+            st.warning("Select at least one question type for the preview.")
+        else:
+            try:
+                needs_t5_stems = any(
+                    question_type in {QuestionType.MULTIPLE_CHOICE, QuestionType.SHORT_ANSWER}
+                    for question_type in selected_types
+                )
+                if needs_t5_stems and not st.session_state.get("question_preview"):
+                    with st.spinner("Loading the local T5 model and generating question stems..."):
+                        generator = load_cached_question_generator()
+                        tokenizer_estimator = make_tokenizer_estimator(generator.tokenizer)
+                        tokenizer_chunks = chunk_sentences(
+                            sentences,
+                            target_size=MODEL_CONTEXT_TOKEN_BUDGET,
+                            overlap_size=CHUNK_OVERLAP_SIZE,
+                            estimator=tokenizer_estimator,
+                        )
+                        st.session_state["question_preview"] = QuestionPreviewService(
+                            generator,
+                            estimator=tokenizer_estimator,
+                        ).generate_preview(tokenizer_chunks, candidates)
+                st.session_state["question_types_preview"] = QuestionBuilderService(
+                    candidates,
+                    st.session_state.get("question_preview", ()),
+                ).build_preview(
+                    selected_types,
+                    difficulty=difficulty,
+                    per_type_limit=QUESTION_TYPE_PREVIEW_LIMIT,
+                )
+                if not st.session_state["question_types_preview"]:
+                    st.warning("No safe questions could be built for the selected types.")
+            except QuestLLMError as error:
+                st.error(str(error))
+
+    show_question_type_preview(st.session_state.get("question_types_preview", ()))
+
 st.caption(
-    "Question stems are a development preview; quiz-taking and scoring are not available yet."
+    "Question previews are for development only; quiz-taking and scoring are not available yet."
 )
