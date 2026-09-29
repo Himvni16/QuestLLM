@@ -70,6 +70,13 @@ MAXIMUM_QUESTION_CHARACTERS = 240
 FILL_IN_THE_BLANK_TOKEN = "________"
 QUESTION_TYPE_PREVIEW_LIMIT = 1
 MCQ_CHOICE_ORDER_SEED = 17
+MINIMUM_QUIZ_QUESTION_COUNT = 1
+MAXIMUM_QUIZ_QUESTION_COUNT = 20
+MAXIMUM_CANDIDATES_ATTEMPTED = 24
+MAXIMUM_STEM_GENERATION_ATTEMPTS = 24
+QUESTION_NEAR_DUPLICATE_THRESHOLD = 0.82
+QUESTION_QUALITY_CUTOFF = 0.55
+QUIZ_COVERAGE_BONUS = 0.08
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,8 @@ class AppSettings:
     question_generation_model_id: str = QUESTION_GENERATION_MODEL_ID
     question_preview_limit: int = QUESTION_PREVIEW_LIMIT
     question_type_preview_limit: int = QUESTION_TYPE_PREVIEW_LIMIT
+    minimum_quiz_question_count: int = MINIMUM_QUIZ_QUESTION_COUNT
+    maximum_quiz_question_count: int = MAXIMUM_QUIZ_QUESTION_COUNT
 
 
 def get_settings() -> AppSettings:

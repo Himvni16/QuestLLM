@@ -48,4 +48,4 @@ class Question:
     paragraph_index: int
     page_number: int | None
     difficulty: Difficulty
-    metadata: Mapping[str, int | str | bool] = field(default_factory=dict)
+    metadata: Mapping[str, int | float | str | bool] = field(default_factory=dict)

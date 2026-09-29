@@ -20,13 +20,18 @@ def _candidate_occurrences(text: str, candidate_text: str) -> list[re.Match[str]
     return list(re.finditer(pattern, text, flags=re.IGNORECASE))
 
 
-def _stable_question_id(question_type: QuestionType, candidate: CandidateAnswer) -> str:
+def _stable_question_id(
+    question_type: QuestionType,
+    candidate: CandidateAnswer,
+    prompt: str,
+) -> str:
     identity = "|".join(
         (
             question_type.value,
             candidate.normalized_text,
             str(candidate.sentence_index),
             candidate.source_sentence,
+            prompt,
         )
     )
     return str(uuid.uuid5(_QUESTION_NAMESPACE, identity))
@@ -46,10 +51,14 @@ def _make_question(
     difficulty: Difficulty,
     choices: tuple[AnswerChoice, ...] = (),
     boolean_answer: bool | None = None,
-    metadata: dict[str, int | str | bool] | None = None,
+    metadata: dict[str, int | float | str | bool] | None = None,
 ) -> Question:
+    question_metadata: dict[str, int | float | str | bool] = {
+        "candidate_importance": candidate.importance_score,
+    }
+    question_metadata.update(metadata or {})
     return Question(
-        id=_stable_question_id(question_type, candidate),
+        id=_stable_question_id(question_type, candidate, prompt),
         question_type=question_type,
         prompt=prompt,
         correct_answer=candidate.text if boolean_answer is None else str(boolean_answer),
@@ -64,7 +73,7 @@ def _make_question(
         paragraph_index=candidate.paragraph_index,
         page_number=candidate.page_number,
         difficulty=difficulty,
-        metadata=metadata or {},
+        metadata=question_metadata,
     )
 
 
@@ -214,7 +223,7 @@ def build_multiple_choice(
     distractors = select_distractors(stem.candidate, candidates, difficulty=difficulty, limit=3)
     if len(distractors) != 3:
         return None
-    question_id = _stable_question_id(QuestionType.MULTIPLE_CHOICE, stem.candidate)
+    question_id = _stable_question_id(QuestionType.MULTIPLE_CHOICE, stem.candidate, prompt)
     choices = _build_choices(question_id, stem.candidate, distractors, seed=choice_seed)
     if len(choices) != 4 or sum(choice.is_correct for choice in choices) != 1:
         return None
