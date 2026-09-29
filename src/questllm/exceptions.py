@@ -39,3 +39,7 @@ class ModelLoadError(QuestLLMError):
 
 class GenerationError(QuestLLMError):
     """Raised when a grounded question cannot be built or generated safely."""
+
+
+class WorkflowError(QuestLLMError):
+    """Raised when an invalid quiz workflow transition is requested."""

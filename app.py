@@ -1,4 +1,4 @@
-"""Streamlit entry point for QuestLLM."""
+"""Streamlit entry point for QuestLLM's create, attempt, and review workflow."""
 
 import streamlit as st
 
@@ -14,13 +14,23 @@ from questllm.config import (
 )
 from questllm.document import Document
 from questllm.exceptions import QuestLLMError
-from questllm.generation import QuestionPreviewService, T5QuestionGenerator
+from questllm.generation import T5QuestionGenerator
 from questllm.ingestion import ingest_pdf, ingest_text
 from questllm.model_loader import load_question_generation_model
 from questllm.preprocessing import ProcessedSentence, preprocess_document
-from questllm.questions import Difficulty, QuestionType
-from questllm.quiz import Quiz
+from questllm.questions import Difficulty, Question, QuestionType
 from questllm.quiz_assembly import QuizGenerationPipeline
+from questllm.scoring import AnswerStatus, AnswerValue, QuestionScore
+from questllm.workflow import (
+    QuizWorkflow,
+    WorkflowStage,
+    begin_generation,
+    complete_generation,
+    get_workflow,
+    reset_workflow,
+    save_workflow,
+    submit_quiz,
+)
 
 st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="centered")
 
@@ -42,7 +52,7 @@ def show_document_summary(document: Document) -> None:
 def show_chunk_summary(
     sentences: tuple[ProcessedSentence, ...], chunks: tuple[TextChunk, ...]
 ) -> None:
-    """Render the sentence and chunk information relevant to this processing phase."""
+    """Render sentence and chunk information that is useful before quiz assembly."""
 
     st.caption(f"{len(sentences)} usable sentences · {len(chunks)} text chunks")
     for chunk in chunks:
@@ -52,14 +62,12 @@ def show_chunk_summary(
 
 
 def show_candidate_preview(candidates: tuple[CandidateAnswer, ...]) -> None:
-    """Render a compact, intermediate preview of the strongest answer candidates."""
+    """Render an intermediate candidate preview before a quiz attempt begins."""
 
     st.subheader("Candidate-answer preview")
     if not candidates:
         st.info("No strong answer candidates were found in this material.")
         return
-
-    st.caption(f"{len(candidates)} ranked candidates selected across the source material")
     preview = []
     for candidate in candidates:
         item = {
@@ -75,127 +83,194 @@ def show_candidate_preview(candidates: tuple[CandidateAnswer, ...]) -> None:
 
 @st.cache_resource(show_spinner=False)
 def load_cached_question_generator() -> T5QuestionGenerator:
-    """Cache the heavyweight local model at the UI boundary after a user requests it."""
+    """Cache the heavyweight local model only after a user explicitly requests generation."""
 
     return T5QuestionGenerator(load_question_generation_model())
 
 
-def show_question_preview() -> None:
-    """Render development-only question stems with their expected answers and source references."""
+def process_document(document: Document) -> None:
+    """Run downstream preparation once and retain it only in create state."""
 
-    results = st.session_state.get("question_preview", ())
-    if not results:
-        return
-    st.subheader("Question-stem preview")
-    for index, result in enumerate(results, start=1):
-        st.markdown(f"**{index}. {result.question}**")
-        st.write(f"Expected answer: `{result.candidate.text}`")
-        if result.page_number is not None:
-            st.caption(f"Source page {result.page_number}")
-        with st.expander("Source excerpt"):
-            st.write(result.source_sentence)
+    sentences = preprocess_document(document)
+    chunks = chunk_sentences(sentences)
+    candidates = extract_and_rank_candidates(sentences)
+    st.session_state["processed_content"] = (document, sentences, chunks, candidates)
 
 
-def show_quiz_preview(quiz: Quiz | None) -> None:
-    """Render a development-only assembled quiz with transparent answers and warnings."""
-
-    if quiz is None:
-        return
-    st.subheader("Quiz preview")
-    st.caption(
-        f"Requested {quiz.requested_question_count} · Generated {quiz.actual_question_count} · "
-        f"Seed {quiz.generation_seed}"
+def _choice_text(question: Question, choice_id: str | None) -> str:
+    if choice_id is None:
+        return "No answer"
+    return next(
+        (choice.text for choice in question.choices if choice.id == choice_id),
+        "Invalid choice",
     )
+
+
+def _review_answer(question: Question, result: QuestionScore) -> str:
+    if result.status is AnswerStatus.UNANSWERED:
+        return "No answer"
+    if question.question_type is QuestionType.MULTIPLE_CHOICE:
+        choice_id = result.user_answer if isinstance(result.user_answer, str) else None
+        return _choice_text(question, choice_id)
+    return str(result.user_answer)
+
+
+def render_attempt(workflow: QuizWorkflow) -> None:
+    """Render answer-only controls; answers, provenance, and correctness stay hidden here."""
+
+    quiz = workflow.quiz
+    if quiz is None:
+        st.error("No quiz is available. Start over and generate a new quiz.")
+        return
+    st.header("Attempt Quiz")
+    st.caption(f"{quiz.actual_question_count} questions · Difficulty: {quiz.difficulty.value}")
     for warning in quiz.warnings:
         st.warning(warning)
-    st.caption("Development preview: correct answers and source excerpts are visible.")
+
+    with st.form(f"quiz-attempt-{quiz.id}"):
+        answers: dict[str, AnswerValue] = {}
+        for index, question in enumerate(quiz.questions, start=1):
+            st.markdown(f"**{index}. {question.question_type.value}**")
+            st.write(question.prompt)
+            answer_key = f"answer-{quiz.id}-{question.id}"
+            saved_answer = workflow.answers.get(question.id)
+            if question.question_type is QuestionType.MULTIPLE_CHOICE:
+                choice_ids = [choice.id for choice in question.choices]
+                selected_index = (
+                    choice_ids.index(saved_answer) if saved_answer in choice_ids else None
+                )
+                answers[question.id] = st.radio(
+                    "Choose one answer",
+                    options=choice_ids,
+                    index=selected_index,
+                    format_func=lambda choice_id, item=question: _choice_text(item, choice_id),
+                    key=answer_key,
+                )
+            elif question.question_type is QuestionType.TRUE_FALSE:
+                selected_index = (
+                    (0 if saved_answer else 1) if isinstance(saved_answer, bool) else None
+                )
+                answers[question.id] = st.radio(
+                    "Choose True or False",
+                    options=(True, False),
+                    index=selected_index,
+                    format_func=lambda value: "True" if value else "False",
+                    key=answer_key,
+                )
+            elif question.question_type is QuestionType.FILL_IN_THE_BLANK:
+                answers[question.id] = st.text_input(
+                    "Your answer",
+                    value=saved_answer if isinstance(saved_answer, str) else "",
+                    key=answer_key,
+                )
+            else:
+                answers[question.id] = st.text_area(
+                    "Your answer",
+                    value=saved_answer if isinstance(saved_answer, str) else "",
+                    key=answer_key,
+                    height=90,
+                )
+        submitted = st.form_submit_button("Submit Quiz", type="primary")
+
+    if submitted:
+        try:
+            save_workflow(st.session_state, submit_quiz(workflow, answers))
+            st.rerun()
+        except QuestLLMError as error:
+            st.error(str(error))
+
+
+def render_review(workflow: QuizWorkflow) -> None:
+    """Render score and review details only after frozen answers have been submitted."""
+
+    if workflow.quiz is None or workflow.result is None:
+        st.error("The submitted quiz result is unavailable. Start over to create a new quiz.")
+        return
+    quiz = workflow.quiz
+    result = workflow.result
+    st.header("Quiz Results")
+    st.metric(
+        "Score",
+        f"{result.correct_count} / {result.total_questions}",
+        f"{result.percentage}%",
+    )
+    st.write(
+        f"Correct: {result.correct_count} · Incorrect: {result.incorrect_count} · "
+        f"Unanswered: {result.unanswered_count}"
+    )
+    st.subheader("Breakdown by question type")
+    st.table(
+        [
+            {
+                "Type": question_type.value,
+                "Correct": type_score.correct,
+                "Total": type_score.total,
+                "Unanswered": type_score.unanswered,
+            }
+            for question_type, type_score in result.by_type.items()
+        ]
+    )
+    results_by_id = {item.question_id: item for item in result.question_results}
+    st.subheader("Review")
     for index, question in enumerate(quiz.questions, start=1):
-        st.markdown(f"**{index}. {question.question_type.value} · {question.difficulty.value}**")
+        question_result = results_by_id[question.id]
+        st.markdown(f"**{index}. {question.question_type.value}**")
         st.write(question.prompt)
+        if question_result.status is AnswerStatus.CORRECT:
+            st.success("Correct")
+        elif question_result.status is AnswerStatus.UNANSWERED:
+            st.warning("Unanswered")
+        else:
+            st.error("Incorrect")
         if question.choices:
             for choice in question.choices:
-                st.write(f"- {choice.id[:8]}: {choice.text}")
+                st.write(f"- {choice.text}")
+        st.write(f"Your answer: `{_review_answer(question, question_result)}`")
         st.write(f"Correct answer: `{question.correct_answer}`")
+        if question.question_type is QuestionType.TRUE_FALSE and question.boolean_answer is False:
+            st.write(f"Original source fact: {question.source_sentence}")
         if question.page_number is not None:
             st.caption(f"Source page {question.page_number}")
         with st.expander("Source excerpt"):
             st.write(question.source_excerpt)
 
 
-def process_document(document: Document) -> None:
-    """Run the completed pre-generation workflow and retain it for the preview action."""
+def render_create(workflow: QuizWorkflow) -> None:
+    """Render source/configuration controls only while no active quiz exists."""
 
-    sentences = preprocess_document(document)
-    chunks = chunk_sentences(sentences)
-    candidates = extract_and_rank_candidates(sentences)
-    st.session_state["processed_content"] = (document, sentences, chunks, candidates)
-    st.session_state.pop("question_preview", None)
-    st.session_state.pop("quiz_preview", None)
-
-
-source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
-
-if source_choice == "Paste Text":
-    pasted_text = st.text_area(
-        "Paste text",
-        placeholder=(
-            "Paste learning material here. QuestLLM will prepare it for a later quiz phase."
-        ),
-        height=220,
-    )
-    if st.button("Process Content", type="primary"):
-        try:
-            process_document(ingest_text(pasted_text))
-        except QuestLLMError as error:
-            st.error(str(error))
-else:
-    uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
-    if st.button("Process Content", type="primary"):
-        if uploaded_pdf is None:
-            st.error("Upload a PDF before processing content.")
-        else:
+    source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
+    if source_choice == "Paste Text":
+        pasted_text = st.text_area(
+            "Paste text",
+            placeholder="Paste learning material here. QuestLLM will prepare it for a quiz.",
+            height=220,
+        )
+        if st.button("Process Content", type="primary"):
             try:
-                process_document(ingest_pdf(uploaded_pdf, filename=uploaded_pdf.name))
+                process_document(ingest_text(pasted_text))
             except QuestLLMError as error:
                 st.error(str(error))
+    else:
+        uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
+        if st.button("Process Content", type="primary"):
+            if uploaded_pdf is None:
+                st.error("Upload a PDF before processing content.")
+            else:
+                try:
+                    process_document(ingest_pdf(uploaded_pdf, filename=uploaded_pdf.name))
+                except QuestLLMError as error:
+                    st.error(str(error))
 
-processed_content = st.session_state.get("processed_content")
-if processed_content:
+    processed_content = st.session_state.get("processed_content")
+    if not processed_content:
+        return
     document, sentences, chunks, candidates = processed_content
     show_document_summary(document)
     show_chunk_summary(sentences, chunks)
     show_candidate_preview(candidates)
 
-    if st.button("Generate Question Preview"):
-        try:
-            with st.spinner("Loading the local T5 model and generating question stems..."):
-                generator = load_cached_question_generator()
-                tokenizer_chunks = chunk_sentences(
-                    sentences,
-                    target_size=MODEL_CONTEXT_TOKEN_BUDGET,
-                    overlap_size=CHUNK_OVERLAP_SIZE,
-                    estimator=make_tokenizer_estimator(generator.tokenizer),
-                )
-                service = QuestionPreviewService(
-                    generator,
-                    estimator=make_tokenizer_estimator(generator.tokenizer),
-                )
-                st.session_state["question_preview"] = service.generate_preview(
-                    tokenizer_chunks,
-                    candidates,
-                )
-            st.info(f"Using local inference on {generator.device.upper()}.")
-            if not st.session_state["question_preview"]:
-                st.warning(
-                    "No safe question stems could be generated from the selected candidates."
-                )
-        except QuestLLMError as error:
-            st.error(str(error))
-
-    show_question_preview()
-
     selected_type_labels = st.multiselect(
-        "Question types for quiz preview",
+        "Question types",
         options=[question_type.value for question_type in QuestionType],
         default=[question_type.value for question_type in QuestionType],
     )
@@ -211,31 +286,40 @@ if processed_content:
     )
     generation_seed = st.number_input("Generation seed", min_value=0, value=17, step=1)
 
-    if st.button("Generate Quiz Preview"):
+    if st.button("Generate Quiz", type="primary"):
         if not selected_types:
-            st.warning("Select at least one question type for the quiz preview.")
-        else:
-            try:
-                needs_t5_stems = any(
-                    question_type in {QuestionType.MULTIPLE_CHOICE, QuestionType.SHORT_ANSWER}
-                    for question_type in selected_types
-                )
-                generator = None
-                quiz_chunks = chunks
+            st.warning("Select at least one question type.")
+            return
+        configuration = {
+            "difficulty": difficulty.value,
+            "requested_count": int(requested_count),
+            "question_types": ", ".join(question_type.value for question_type in selected_types),
+        }
+        try:
+            generating_workflow = begin_generation(
+                workflow,
+                document=document,
+                configuration=configuration,
+                seed=int(generation_seed),
+            )
+            save_workflow(st.session_state, generating_workflow)
+            needs_t5_stems = any(
+                question_type in {QuestionType.MULTIPLE_CHOICE, QuestionType.SHORT_ANSWER}
+                for question_type in selected_types
+            )
+            generator = None
+            quiz_chunks = chunks
+            with st.spinner("Generating a grounded quiz..."):
                 if needs_t5_stems:
-                    with st.spinner("Loading the local T5 model and generating question stems..."):
-                        generator = load_cached_question_generator()
-                        tokenizer_estimator = make_tokenizer_estimator(generator.tokenizer)
-                        tokenizer_chunks = chunk_sentences(
-                            sentences,
-                            target_size=MODEL_CONTEXT_TOKEN_BUDGET,
-                            overlap_size=CHUNK_OVERLAP_SIZE,
-                            estimator=tokenizer_estimator,
-                        )
-                        quiz_chunks = tokenizer_chunks
-                st.session_state["quiz_preview"] = QuizGenerationPipeline(
-                    generator
-                ).build_from_processed(
+                    generator = load_cached_question_generator()
+                    tokenizer_estimator = make_tokenizer_estimator(generator.tokenizer)
+                    quiz_chunks = chunk_sentences(
+                        sentences,
+                        target_size=MODEL_CONTEXT_TOKEN_BUDGET,
+                        overlap_size=CHUNK_OVERLAP_SIZE,
+                        estimator=tokenizer_estimator,
+                    )
+                quiz = QuizGenerationPipeline(generator).build_from_processed(
                     document,
                     chunks=quiz_chunks,
                     candidates=candidates,
@@ -243,15 +327,25 @@ if processed_content:
                     question_types=selected_types,
                     difficulty=difficulty,
                     seed=int(generation_seed),
-                    pre_generated_stems=st.session_state.get("question_preview", ()),
                 )
-            except QuestLLMError as error:
-                st.error(str(error))
-            except ValueError as error:
-                st.error(str(error))
+            save_workflow(st.session_state, complete_generation(generating_workflow, quiz))
+            st.rerun()
+        except (QuestLLMError, ValueError) as error:
+            save_workflow(st.session_state, reset_workflow())
+            st.error(str(error))
 
-    show_quiz_preview(st.session_state.get("quiz_preview"))
 
-st.caption(
-    "Question previews are for development only; quiz-taking and scoring are not available yet."
-)
+workflow = get_workflow(st.session_state)
+if workflow.stage is WorkflowStage.CREATE:
+    render_create(workflow)
+else:
+    if st.button("Create New Quiz"):
+        save_workflow(st.session_state, reset_workflow())
+        st.session_state.pop("processed_content", None)
+        st.rerun()
+    if workflow.stage is WorkflowStage.ATTEMPT:
+        render_attempt(workflow)
+    elif workflow.stage is WorkflowStage.REVIEW:
+        render_review(workflow)
+    else:
+        st.info("Generating your quiz. Please wait for the current request to finish.")
