@@ -2,9 +2,9 @@
 
 QuestLLM is a local-first quiz generation application built with Python and Streamlit.
 
-Phase 4 supports pasted text and text-based PDF ingestion, sentence preprocessing,
-sentence-aware chunking, and explainable candidate-answer ranking. OCR, model loading, and quiz
-generation will be added incrementally in later phases.
+Phase 5 supports pasted text and text-based PDF ingestion, sentence preprocessing,
+sentence-aware chunking, candidate-answer ranking, and local T5 question-stem previews. OCR,
+multiple-choice construction, quiz-taking, and scoring will be added incrementally in later phases.
 
 ## Local setup
 
@@ -20,6 +20,14 @@ explicitly:
 
 ```powershell
 python -m questllm.nltk_resources --download
+```
+
+The first **Generate Question Preview** request downloads the configured Hugging Face model
+(`valhalla/t5-base-qa-qg-hl`) if it is not already cached. It runs locally on CUDA when available,
+otherwise on CPU. To explicitly test that model outside the UI (this may download model files):
+
+```powershell
+python scripts/smoke_test_model.py
 ```
 
 ## Quality checks

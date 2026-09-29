@@ -3,11 +3,18 @@
 import streamlit as st
 
 from questllm.candidates import CandidateAnswer, extract_and_rank_candidates
-from questllm.chunking import TextChunk, chunk_sentences
-from questllm.config import APP_DESCRIPTION, APP_NAME
+from questllm.chunking import TextChunk, chunk_sentences, make_tokenizer_estimator
+from questllm.config import (
+    APP_DESCRIPTION,
+    APP_NAME,
+    CHUNK_OVERLAP_SIZE,
+    MODEL_CONTEXT_TOKEN_BUDGET,
+)
 from questllm.document import Document
 from questllm.exceptions import QuestLLMError
+from questllm.generation import QuestionPreviewService, T5QuestionGenerator
 from questllm.ingestion import ingest_pdf, ingest_text
+from questllm.model_loader import load_question_generation_model
 from questllm.preprocessing import ProcessedSentence, preprocess_document
 
 st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="centered")
@@ -61,6 +68,39 @@ def show_candidate_preview(candidates: tuple[CandidateAnswer, ...]) -> None:
     st.table(preview)
 
 
+@st.cache_resource(show_spinner=False)
+def load_cached_question_generator() -> T5QuestionGenerator:
+    """Cache the heavyweight local model at the UI boundary after a user requests it."""
+
+    return T5QuestionGenerator(load_question_generation_model())
+
+
+def show_question_preview() -> None:
+    """Render development-only question stems with their expected answers and source references."""
+
+    results = st.session_state.get("question_preview", ())
+    if not results:
+        return
+    st.subheader("Question-stem preview")
+    for index, result in enumerate(results, start=1):
+        st.markdown(f"**{index}. {result.question}**")
+        st.write(f"Expected answer: `{result.candidate.text}`")
+        if result.page_number is not None:
+            st.caption(f"Source page {result.page_number}")
+        with st.expander("Source excerpt"):
+            st.write(result.source_sentence)
+
+
+def process_document(document: Document) -> None:
+    """Run the completed pre-generation workflow and retain it for the preview action."""
+
+    sentences = preprocess_document(document)
+    chunks = chunk_sentences(sentences)
+    candidates = extract_and_rank_candidates(sentences)
+    st.session_state["processed_content"] = (document, sentences, chunks, candidates)
+    st.session_state.pop("question_preview", None)
+
+
 source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
 
 if source_choice == "Paste Text":
@@ -73,11 +113,7 @@ if source_choice == "Paste Text":
     )
     if st.button("Process Content", type="primary"):
         try:
-            document = ingest_text(pasted_text)
-            sentences = preprocess_document(document)
-            show_document_summary(document)
-            show_chunk_summary(sentences, chunk_sentences(sentences))
-            show_candidate_preview(extract_and_rank_candidates(sentences))
+            process_document(ingest_text(pasted_text))
         except QuestLLMError as error:
             st.error(str(error))
 else:
@@ -87,15 +123,45 @@ else:
             st.error("Upload a PDF before processing content.")
         else:
             try:
-                document = ingest_pdf(uploaded_pdf, filename=uploaded_pdf.name)
-                sentences = preprocess_document(document)
-                show_document_summary(document)
-                show_chunk_summary(sentences, chunk_sentences(sentences))
-                show_candidate_preview(extract_and_rank_candidates(sentences))
+                process_document(ingest_pdf(uploaded_pdf, filename=uploaded_pdf.name))
             except QuestLLMError as error:
                 st.error(str(error))
 
+processed_content = st.session_state.get("processed_content")
+if processed_content:
+    document, sentences, chunks, candidates = processed_content
+    show_document_summary(document)
+    show_chunk_summary(sentences, chunks)
+    show_candidate_preview(candidates)
+
+    if st.button("Generate Question Preview"):
+        try:
+            with st.spinner("Loading the local T5 model and generating question stems..."):
+                generator = load_cached_question_generator()
+                tokenizer_chunks = chunk_sentences(
+                    sentences,
+                    target_size=MODEL_CONTEXT_TOKEN_BUDGET,
+                    overlap_size=CHUNK_OVERLAP_SIZE,
+                    estimator=make_tokenizer_estimator(generator.tokenizer),
+                )
+                service = QuestionPreviewService(
+                    generator,
+                    estimator=make_tokenizer_estimator(generator.tokenizer),
+                )
+                st.session_state["question_preview"] = service.generate_preview(
+                    tokenizer_chunks,
+                    candidates,
+                )
+            st.info(f"Using local inference on {generator.device.upper()}.")
+            if not st.session_state["question_preview"]:
+                st.warning(
+                    "No safe question stems could be generated from the selected candidates."
+                )
+        except QuestLLMError as error:
+            st.error(str(error))
+
+    show_question_preview()
+
 st.caption(
-    "Candidate extraction is an intermediate processing phase; "
-    "quiz generation is not available yet."
+    "Question stems are a development preview; quiz-taking and scoring are not available yet."
 )

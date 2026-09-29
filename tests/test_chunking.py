@@ -1,6 +1,6 @@
 """Unit tests for sentence-aware approximate chunking."""
 
-from questllm.chunking import chunk_sentences
+from questllm.chunking import chunk_sentences, make_tokenizer_estimator
 from questllm.preprocessing import ProcessedSentence
 
 
@@ -74,3 +74,14 @@ def test_short_documents_produce_one_chunk() -> None:
 
     assert len(chunks) == 1
     assert chunks[0].sentences == sentences
+
+
+def test_tokenizer_estimator_keeps_chunking_injectable() -> None:
+    class FakeTokenizer:
+        def encode(self, text: str, *, add_special_tokens: bool) -> list[str]:
+            assert add_special_tokens is True
+            return ["<s>", *text.split(), "</s>"]
+
+    estimator = make_tokenizer_estimator(FakeTokenizer())
+
+    assert estimator("One short sentence.") == 5

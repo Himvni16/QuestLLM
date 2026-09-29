@@ -28,6 +28,21 @@ def estimate_word_tokens(text: str) -> int:
     return len(_WORD_PATTERN.findall(text))
 
 
+def make_tokenizer_estimator(tokenizer: object) -> SizeEstimator:
+    """Return a tokenizer-based size estimator without coupling chunking to Transformers."""
+
+    def estimate_tokens(text: str) -> int:
+        try:
+            encoded = tokenizer.encode(text, add_special_tokens=True)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError) as error:
+            raise TypeError(
+                "The tokenizer must provide encode(text, add_special_tokens=True)."
+            ) from error
+        return len(encoded)
+
+    return estimate_tokens
+
+
 def _sentence_size(sentence: ProcessedSentence, estimator: SizeEstimator) -> int:
     return estimator(sentence.text)
 

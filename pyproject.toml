@@ -12,7 +12,10 @@ dependencies = [
     "nltk>=3.9,<4",
     "pypdf>=5,<7",
     "scikit-learn>=1.5,<2",
+    "sentencepiece>=0.2,<1",
     "streamlit>=1.40,<2.0",
+    "torch>=2.4,<3",
+    "transformers>=4.47,<5",
 ]
 
 [tool.setuptools]

@@ -58,6 +58,15 @@ CANDIDATE_STOPWORDS = frozenset(
         "your",
     }
 )
+QUESTION_GENERATION_MODEL_ID = "valhalla/t5-base-qa-qg-hl"
+MODEL_MAX_INPUT_TOKENS = 512
+MODEL_INPUT_TOKEN_RESERVE = 96
+MODEL_CONTEXT_TOKEN_BUDGET = MODEL_MAX_INPUT_TOKENS - MODEL_INPUT_TOKEN_RESERVE
+QUESTION_PREVIEW_LIMIT = 3
+QUESTION_GENERATION_NUM_BEAMS = 4
+QUESTION_GENERATION_MAX_NEW_TOKENS = 64
+MINIMUM_QUESTION_CHARACTERS = 12
+MAXIMUM_QUESTION_CHARACTERS = 240
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,8 @@ class AppSettings:
     target_chunk_size: int = TARGET_CHUNK_SIZE
     chunk_overlap_size: int = CHUNK_OVERLAP_SIZE
     candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
+    question_generation_model_id: str = QUESTION_GENERATION_MODEL_ID
+    question_preview_limit: int = QUESTION_PREVIEW_LIMIT
 
 
 def get_settings() -> AppSettings:

@@ -31,3 +31,11 @@ class NoUsablePdfTextError(IngestionError):
 
 class NltkResourceError(QuestLLMError):
     """Raised when local NLTK tokenizer data has not been installed."""
+
+
+class ModelLoadError(QuestLLMError):
+    """Raised when QuestLLM cannot load its local question-generation model."""
+
+
+class GenerationError(QuestLLMError):
+    """Raised when a grounded question cannot be built or generated safely."""
