@@ -6,6 +6,7 @@ APP_NAME = "QuestLLM"
 APP_DESCRIPTION = "Create practice quizzes from your learning material, locally."
 MINIMUM_TEXT_CHARACTERS = 50
 MINIMUM_TOPIC_CHARACTERS = 2
+NLTK_DOWNLOAD_TIMEOUT_SECONDS = 60
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_ARTICLE_BASE_URL = "https://en.wikipedia.org/wiki/"
 WIKIPEDIA_USER_AGENT = "QuestLLM/0.1 (local educational quiz generator)"

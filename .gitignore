@@ -34,6 +34,15 @@ htmlcov/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local model and data artifacts
+.huggingface/
+huggingface/
+*.safetensors
+pytorch_model*.bin
+*.pt
+*.pth
+*.ckpt
+
 # Editors and operating systems
 .vscode/
 .idea/

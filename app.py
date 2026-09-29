@@ -2,10 +2,9 @@
 
 import streamlit as st
 
-from questllm.candidates import CandidateAnswer, extract_and_rank_candidates
-from questllm.chunking import TextChunk, chunk_sentences, make_tokenizer_estimator
+from questllm.candidates import extract_and_rank_candidates
+from questllm.chunking import chunk_sentences, make_tokenizer_estimator
 from questllm.config import (
-    APP_DESCRIPTION,
     APP_NAME,
     CHUNK_OVERLAP_SIZE,
     MAXIMUM_QUIZ_QUESTION_COUNT,
@@ -22,7 +21,7 @@ from questllm.ingestion import (
     ingest_text,
 )
 from questllm.model_loader import load_question_generation_model
-from questllm.preprocessing import ProcessedSentence, preprocess_document
+from questllm.preprocessing import preprocess_document
 from questllm.questions import Difficulty, Question, QuestionType
 from questllm.quiz_assembly import QuizGenerationPipeline
 from questllm.scoring import AnswerStatus, AnswerValue, QuestionScore
@@ -46,53 +45,37 @@ from questllm.workflow import (
     submit_quiz,
 )
 
-st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="centered")
+st.set_page_config(page_title=f"{APP_NAME} | Quiz Generator", page_icon="🧭", layout="centered")
 
 st.title(APP_NAME)
-st.write(APP_DESCRIPTION)
+st.caption("Turn your study material into a grounded practice quiz.")
 
 
-def show_document_summary(document: Document) -> None:
-    """Render a concise summary of successfully ingested content."""
-
-    st.success("Content processed successfully.")
-    summary = {"Source type": document.source_type.value, "Characters": document.character_count}
-    if document.page_count:
-        summary["Pages"] = document.page_count
-    st.json(summary)
-    st.text_area("Processed-text preview", document.text[:800], height=180, disabled=True)
-
-
-def show_chunk_summary(
-    sentences: tuple[ProcessedSentence, ...], chunks: tuple[TextChunk, ...]
+def show_source_summary(
+    document: Document,
+    *,
+    sentence_count: int,
+    chunk_count: int,
+    candidate_count: int,
 ) -> None:
-    """Render sentence and chunk information that is useful before quiz assembly."""
+    """Confirm a prepared source while keeping implementation details optional."""
 
-    st.caption(f"{len(sentences)} usable sentences · {len(chunks)} text chunks")
-    for chunk in chunks:
-        label = f"Chunk {chunk.index + 1} · approximately {chunk.estimated_token_count} words"
-        with st.expander(label):
-            st.write(chunk.text)
-
-
-def show_candidate_preview(candidates: tuple[CandidateAnswer, ...]) -> None:
-    """Render an intermediate candidate preview before a quiz attempt begins."""
-
-    st.subheader("Candidate-answer preview")
-    if not candidates:
-        st.info("No strong answer candidates were found in this material.")
-        return
-    preview = []
-    for candidate in candidates:
-        item = {
-            "Candidate": candidate.text,
-            "Type": candidate.candidate_type.value,
-            "Score": round(candidate.importance_score, 2),
-        }
-        if candidate.page_number is not None:
-            item["Page"] = candidate.page_number
-        preview.append(item)
-    st.table(preview)
+    st.success("Your source is ready. Choose quiz settings below.")
+    source_label = {
+        "text": "Pasted text",
+        "pdf": "PDF upload",
+        "topic": "Wikipedia article",
+    }[document.source_type.value]
+    metrics = st.columns(3)
+    metrics[0].metric("Source", source_label)
+    metrics[1].metric("Characters", f"{document.character_count:,}")
+    metrics[2].metric("Pages", document.page_count if document.page_count else "—")
+    with st.expander("Processing details"):
+        st.caption(
+            f"Prepared {sentence_count} sentences across {chunk_count} sections and found "
+            f"{candidate_count} quiz concepts."
+        )
+        st.text_area("Source preview", document.text[:800], height=160, disabled=True)
 
 
 @st.cache_resource(show_spinner=False)
@@ -170,6 +153,7 @@ def render_attempt(workflow: QuizWorkflow) -> None:
         return
     st.header("Attempt Quiz")
     st.caption(f"{quiz.actual_question_count} questions · Difficulty: {quiz.difficulty.value}")
+    st.info("Choose an answer for each question, then submit when you are ready.")
     for warning in quiz.warnings:
         st.warning(warning)
 
@@ -235,15 +219,11 @@ def render_review(workflow: QuizWorkflow) -> None:
     quiz = workflow.quiz
     result = workflow.result
     st.header("Quiz Results")
-    st.metric(
-        "Score",
-        f"{result.correct_count} / {result.total_questions}",
-        f"{result.percentage}%",
-    )
-    st.write(
-        f"Correct: {result.correct_count} · Incorrect: {result.incorrect_count} · "
-        f"Unanswered: {result.unanswered_count}"
-    )
+    metrics = st.columns(4)
+    metrics[0].metric("Score", f"{result.correct_count} / {result.total_questions}")
+    metrics[1].metric("Percentage", f"{result.percentage}%")
+    metrics[2].metric("Incorrect", result.incorrect_count)
+    metrics[3].metric("Unanswered", result.unanswered_count)
     if quiz.source_metadata.get("source_provider") == "Wikipedia":
         article_title = quiz.source_metadata.get("article_title", "Wikipedia article")
         article_url = quiz.source_metadata.get("article_url")
@@ -359,8 +339,10 @@ def render_topic_input() -> None:
 def render_create(workflow: QuizWorkflow) -> None:
     """Render source/configuration controls only while no active quiz exists."""
 
+    st.header("Create a quiz")
+    st.caption("1. Choose a source · 2. Prepare it · 3. Set quiz options · 4. Generate")
     source_choice = st.radio(
-        "Choose content source",
+        "1. Choose your source",
         ("Paste Text", "Upload PDF", "Enter Topic"),
         horizontal=True,
         key="source_mode",
@@ -375,18 +357,18 @@ def render_create(workflow: QuizWorkflow) -> None:
 
     if source_choice == "Paste Text":
         pasted_text = st.text_area(
-            "Paste text",
+            "2. Paste your learning material",
             placeholder="Paste learning material here. QuestLLM will prepare it for a quiz.",
             height=220,
         )
-        if st.button("Process Content", type="primary"):
+        if st.button("Prepare Text", type="primary"):
             try:
                 process_document(ingest_text(pasted_text))
             except QuestLLMError as error:
                 st.error(str(error))
     elif source_choice == "Upload PDF":
-        uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
-        if st.button("Process Content", type="primary"):
+        uploaded_pdf = st.file_uploader("2. Upload a text-based PDF", type=["pdf"])
+        if st.button("Prepare PDF", type="primary"):
             if uploaded_pdf is None:
                 st.error("Upload a PDF before processing content.")
             else:
@@ -401,10 +383,20 @@ def render_create(workflow: QuizWorkflow) -> None:
     if not processed_content:
         return
     document, sentences, chunks, candidates = processed_content
-    show_document_summary(document)
-    show_chunk_summary(sentences, chunks)
-    show_candidate_preview(candidates)
+    show_source_summary(
+        document,
+        sentence_count=len(sentences),
+        chunk_count=len(chunks),
+        candidate_count=len(candidates),
+    )
+    if not candidates:
+        st.warning(
+            "QuestLLM could not find enough clear concepts in this source. "
+            "Try a longer or more factual passage."
+        )
+        return
 
+    st.subheader("3. Quiz settings")
     selected_type_labels = st.multiselect(
         "Question types",
         options=[question_type.value for question_type in QuestionType],
@@ -420,7 +412,14 @@ def render_create(workflow: QuizWorkflow) -> None:
         value=min(6, MAXIMUM_QUIZ_QUESTION_COUNT),
         step=1,
     )
-    generation_seed = st.number_input("Generation seed", min_value=0, value=17, step=1)
+    with st.expander("Advanced settings"):
+        generation_seed = st.number_input(
+            "Generation seed",
+            min_value=0,
+            value=17,
+            step=1,
+            help="Use the same seed to reproduce a quiz from the same source and settings.",
+        )
 
     if st.button("Generate Quiz", type="primary"):
         if not selected_types:
@@ -445,7 +444,7 @@ def render_create(workflow: QuizWorkflow) -> None:
             )
             generator = None
             quiz_chunks = chunks
-            with st.spinner("Generating a grounded quiz..."):
+            with st.spinner("Building your quiz… this can take longer on CPU."):
                 if needs_t5_stems:
                     generator = load_cached_question_generator()
                     tokenizer_estimator = make_tokenizer_estimator(generator.tokenizer)
