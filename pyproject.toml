@@ -9,6 +9,7 @@ description = "A local-first quiz generation application."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "nltk>=3.9,<4",
     "pypdf>=5,<7",
     "streamlit>=1.40,<2.0",
 ]

@@ -27,3 +27,7 @@ class EncryptedPdfError(IngestionError):
 
 class NoUsablePdfTextError(IngestionError):
     """Raised when a PDF has too little extractable text for this OCR-free MVP."""
+
+
+class NltkResourceError(QuestLLMError):
+    """Raised when local NLTK tokenizer data has not been installed."""
