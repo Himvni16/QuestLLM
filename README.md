@@ -2,8 +2,8 @@
 
 QuestLLM is a local-first quiz generation application built with Python and Streamlit.
 
-Phase 1 provides the project scaffold and a minimal landing page. Text processing, PDF
-extraction, model loading, and quiz generation will be added incrementally in later phases.
+Phase 2 supports pasted text and text-based PDF ingestion. OCR, candidate extraction, model
+loading, and quiz generation will be added incrementally in later phases.
 
 ## Local setup
 

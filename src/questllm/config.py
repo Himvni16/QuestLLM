@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 APP_NAME = "QuestLLM"
 APP_DESCRIPTION = "Create practice quizzes from your learning material, locally."
+MINIMUM_TEXT_CHARACTERS = 50
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,7 @@ class AppSettings:
 
     app_name: str = APP_NAME
     language: str = "en"
+    minimum_text_characters: int = MINIMUM_TEXT_CHARACTERS
 
 
 def get_settings() -> AppSettings:
