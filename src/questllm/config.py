@@ -5,6 +5,13 @@ from dataclasses import dataclass
 APP_NAME = "QuestLLM"
 APP_DESCRIPTION = "Create practice quizzes from your learning material, locally."
 MINIMUM_TEXT_CHARACTERS = 50
+MINIMUM_TOPIC_CHARACTERS = 2
+WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
+WIKIPEDIA_ARTICLE_BASE_URL = "https://en.wikipedia.org/wiki/"
+WIKIPEDIA_USER_AGENT = "QuestLLM/0.1 (local educational quiz generator)"
+TOPIC_REQUEST_TIMEOUT_SECONDS = 10
+TOPIC_SEARCH_RESULT_LIMIT = 5
+MAXIMUM_TOPIC_ARTICLE_CHARACTERS = 50_000
 MINIMUM_SENTENCE_CHARACTERS = 15
 TARGET_CHUNK_SIZE = 240
 CHUNK_OVERLAP_SIZE = 40

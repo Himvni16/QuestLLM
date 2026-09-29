@@ -10,6 +10,7 @@ class SourceType(StrEnum):
 
     TEXT = "text"
     PDF = "pdf"
+    TOPIC = "topic"
 
 
 @dataclass(frozen=True, slots=True)

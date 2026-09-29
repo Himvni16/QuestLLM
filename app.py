@@ -15,12 +15,26 @@ from questllm.config import (
 from questllm.document import Document
 from questllm.exceptions import QuestLLMError
 from questllm.generation import T5QuestionGenerator
-from questllm.ingestion import ingest_pdf, ingest_text
+from questllm.ingestion import (
+    TopicSearchResult,
+    WikipediaClient,
+    ingest_pdf,
+    ingest_text,
+)
 from questllm.model_loader import load_question_generation_model
 from questllm.preprocessing import ProcessedSentence, preprocess_document
 from questllm.questions import Difficulty, Question, QuestionType
 from questllm.quiz_assembly import QuizGenerationPipeline
 from questllm.scoring import AnswerStatus, AnswerValue, QuestionScore
+from questllm.topic_state import (
+    get_topic_state,
+    reset_topic_state,
+    save_topic_state,
+    select_topic_result,
+    store_search_results,
+    store_topic_document,
+    update_topic_query,
+)
 from questllm.workflow import (
     QuizWorkflow,
     WorkflowStage,
@@ -95,6 +109,38 @@ def process_document(document: Document) -> None:
     chunks = chunk_sentences(sentences)
     candidates = extract_and_rank_candidates(sentences)
     st.session_state["processed_content"] = (document, sentences, chunks, candidates)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def search_cached_wikipedia(query: str) -> tuple[TopicSearchResult, ...]:
+    """Cache successful topic searches briefly without coupling ingestion to Streamlit."""
+
+    return WikipediaClient().search(query)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def retrieve_cached_wikipedia_article(
+    page_id: int,
+    title: str,
+    description: str,
+    article_url: str,
+    requested_topic: str,
+) -> Document:
+    """Cache successful article retrievals by stable page ID for a reasonable period."""
+
+    result = TopicSearchResult(
+        page_id=page_id,
+        title=title,
+        description=description,
+        article_url=article_url,
+    )
+    return WikipediaClient().retrieve_article(result, requested_topic=requested_topic)
+
+
+def clear_processed_content() -> None:
+    """Remove content derived from a source that is no longer active."""
+
+    st.session_state.pop("processed_content", None)
 
 
 def _choice_text(question: Question, choice_id: str | None) -> str:
@@ -198,6 +244,13 @@ def render_review(workflow: QuizWorkflow) -> None:
         f"Correct: {result.correct_count} · Incorrect: {result.incorrect_count} · "
         f"Unanswered: {result.unanswered_count}"
     )
+    if quiz.source_metadata.get("source_provider") == "Wikipedia":
+        article_title = quiz.source_metadata.get("article_title", "Wikipedia article")
+        article_url = quiz.source_metadata.get("article_url")
+        if article_url:
+            st.markdown(f"Source article: [{article_title}]({article_url})")
+        else:
+            st.caption(f"Source provider: Wikipedia · Article: {article_title}")
     st.subheader("Breakdown by question type")
     st.table(
         [
@@ -235,10 +288,91 @@ def render_review(workflow: QuizWorkflow) -> None:
             st.write(question.source_excerpt)
 
 
+def _topic_result_label(result: TopicSearchResult) -> str:
+    """Format a compact, readable label without exposing API internals."""
+
+    return f"{result.title} — {result.description}" if result.description else result.title
+
+
+def render_topic_input() -> None:
+    """Render explicit Wikipedia search, selection, and processing actions."""
+
+    state = get_topic_state(st.session_state)
+    st.caption(
+        "Topic mode sends your topic to Wikipedia and uses the selected article as quiz source."
+    )
+    query = st.text_input("Enter a topic", value=state.query, key="topic_query_input")
+    updated_state = update_topic_query(state, query)
+    if updated_state != state:
+        state = updated_state
+        save_topic_state(st.session_state, state)
+        clear_processed_content()
+        st.session_state.pop("topic_article_selection", None)
+
+    if st.button("Search Wikipedia", type="primary"):
+        try:
+            results = search_cached_wikipedia(query)
+            state = store_search_results(state, query=query, results=results)
+            save_topic_state(st.session_state, state)
+            st.session_state.pop("topic_article_selection", None)
+        except QuestLLMError as error:
+            st.error(str(error))
+
+    if not state.results:
+        return
+    st.subheader("Choose a Wikipedia article")
+    result_by_id = {result.page_id: result for result in state.results}
+    selected_id = state.selected_result.page_id if state.selected_result else None
+    selected_index = list(result_by_id).index(selected_id) if selected_id in result_by_id else None
+    selected_page_id = st.selectbox(
+        "Search results",
+        options=tuple(result_by_id),
+        index=selected_index,
+        format_func=lambda page_id: _topic_result_label(result_by_id[page_id]),
+        placeholder="Select an article",
+        key="topic_article_selection",
+    )
+    if selected_page_id is not None and selected_page_id != selected_id:
+        state = select_topic_result(state, selected_page_id)
+        save_topic_state(st.session_state, state)
+
+    if state.selected_result is None:
+        return
+    st.caption(f"Selected article: {state.selected_result.title}")
+    st.link_button("Open selected article", state.selected_result.article_url)
+    if st.button("Process Selected Article", type="primary"):
+        try:
+            document = retrieve_cached_wikipedia_article(
+                state.selected_result.page_id,
+                state.selected_result.title,
+                state.selected_result.description,
+                state.selected_result.article_url,
+                state.query,
+            )
+            state = store_topic_document(state, document)
+            save_topic_state(st.session_state, state)
+            process_document(document)
+        except QuestLLMError as error:
+            st.error(str(error))
+
+
 def render_create(workflow: QuizWorkflow) -> None:
     """Render source/configuration controls only while no active quiz exists."""
 
-    source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
+    source_choice = st.radio(
+        "Choose content source",
+        ("Paste Text", "Upload PDF", "Enter Topic"),
+        horizontal=True,
+        key="source_mode",
+    )
+    previous_source = st.session_state.get("active_source_mode")
+    if previous_source is not None and previous_source != source_choice:
+        clear_processed_content()
+        save_topic_state(st.session_state, reset_topic_state())
+        st.session_state.pop("topic_query_input", None)
+        st.session_state.pop("topic_article_selection", None)
+    st.session_state["active_source_mode"] = source_choice
+
     if source_choice == "Paste Text":
         pasted_text = st.text_area(
             "Paste text",
@@ -250,7 +384,7 @@ def render_create(workflow: QuizWorkflow) -> None:
                 process_document(ingest_text(pasted_text))
             except QuestLLMError as error:
                 st.error(str(error))
-    else:
+    elif source_choice == "Upload PDF":
         uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
         if st.button("Process Content", type="primary"):
             if uploaded_pdf is None:
@@ -260,6 +394,8 @@ def render_create(workflow: QuizWorkflow) -> None:
                     process_document(ingest_pdf(uploaded_pdf, filename=uploaded_pdf.name))
                 except QuestLLMError as error:
                     st.error(str(error))
+    else:
+        render_topic_input()
 
     processed_content = st.session_state.get("processed_content")
     if not processed_content:
@@ -341,7 +477,10 @@ if workflow.stage is WorkflowStage.CREATE:
 else:
     if st.button("Create New Quiz"):
         save_workflow(st.session_state, reset_workflow())
-        st.session_state.pop("processed_content", None)
+        clear_processed_content()
+        save_topic_state(st.session_state, reset_topic_state())
+        st.session_state.pop("topic_query_input", None)
+        st.session_state.pop("topic_article_selection", None)
         st.rerun()
     if workflow.stage is WorkflowStage.ATTEMPT:
         render_attempt(workflow)

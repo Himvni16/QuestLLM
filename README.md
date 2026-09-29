@@ -4,7 +4,8 @@ QuestLLM is a local-first quiz generation application built with Python and Stre
 
 QuestLLM supports pasted text and text-based PDF ingestion, sentence preprocessing,
 candidate-answer ranking, local T5 question stems, quality validation, duplicate removal, and
-interactive quiz attempts with scoring and review. It is designed to run locally.
+interactive quiz attempts with scoring and review. It also supports Wikipedia-backed topic input:
+search for a topic, select a source article, and create a quiz from its retrieved text.
 
 ## Local setup
 
@@ -28,6 +29,15 @@ otherwise on CPU. To explicitly test that model outside the UI (this may downloa
 
 ```powershell
 python scripts/smoke_test_model.py
+```
+
+Paste Text and Upload PDF remain local (apart from an initial model download when needed). Topic
+mode sends the entered topic to Wikipedia and retrieves the selected article through the MediaWiki
+API; QuestLLM retains its title and URL as quiz provenance. To run an optional live source-ingestion
+smoke test (not part of pytest), use:
+
+```powershell
+python scripts/smoke_test_topic.py Photosynthesis
 ```
 
 QuestLLM returns a smaller quiz with a warning when it cannot safely satisfy the requested count;
