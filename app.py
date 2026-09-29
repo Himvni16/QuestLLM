@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from questllm.candidates import CandidateAnswer, extract_and_rank_candidates
 from questllm.chunking import TextChunk, chunk_sentences
 from questllm.config import APP_DESCRIPTION, APP_NAME
 from questllm.document import Document
@@ -38,6 +39,28 @@ def show_chunk_summary(
             st.write(chunk.text)
 
 
+def show_candidate_preview(candidates: tuple[CandidateAnswer, ...]) -> None:
+    """Render a compact, intermediate preview of the strongest answer candidates."""
+
+    st.subheader("Candidate-answer preview")
+    if not candidates:
+        st.info("No strong answer candidates were found in this material.")
+        return
+
+    st.caption(f"{len(candidates)} ranked candidates selected across the source material")
+    preview = []
+    for candidate in candidates:
+        item = {
+            "Candidate": candidate.text,
+            "Type": candidate.candidate_type.value,
+            "Score": round(candidate.importance_score, 2),
+        }
+        if candidate.page_number is not None:
+            item["Page"] = candidate.page_number
+        preview.append(item)
+    st.table(preview)
+
+
 source_choice = st.radio("Choose content source", ("Paste Text", "Upload PDF"), horizontal=True)
 
 if source_choice == "Paste Text":
@@ -54,6 +77,7 @@ if source_choice == "Paste Text":
             sentences = preprocess_document(document)
             show_document_summary(document)
             show_chunk_summary(sentences, chunk_sentences(sentences))
+            show_candidate_preview(extract_and_rank_candidates(sentences))
         except QuestLLMError as error:
             st.error(str(error))
 else:
@@ -67,7 +91,11 @@ else:
                 sentences = preprocess_document(document)
                 show_document_summary(document)
                 show_chunk_summary(sentences, chunk_sentences(sentences))
+                show_candidate_preview(extract_and_rank_candidates(sentences))
             except QuestLLMError as error:
                 st.error(str(error))
 
-st.caption("Quiz generation is intentionally not part of this phase.")
+st.caption(
+    "Candidate extraction is an intermediate processing phase; "
+    "quiz generation is not available yet."
+)

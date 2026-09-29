@@ -8,6 +8,56 @@ MINIMUM_TEXT_CHARACTERS = 50
 MINIMUM_SENTENCE_CHARACTERS = 15
 TARGET_CHUNK_SIZE = 240
 CHUNK_OVERLAP_SIZE = 40
+MINIMUM_CANDIDATE_CHARACTERS = 2
+MAXIMUM_CANDIDATE_TOKENS = 5
+MAXIMUM_CANDIDATE_CHARACTERS = 80
+DEFAULT_CANDIDATE_LIMIT = 12
+CANDIDATE_COVERAGE_PENALTY = 0.08
+CANDIDATE_FREQUENCY_BONUS = 0.05
+CANDIDATE_SENTENCE_QUALITY_BONUS = 0.05
+CANDIDATE_LENGTH_PENALTY = 0.02
+
+# This intentionally small list only filters obvious non-answer phrases. It is not
+# a replacement for NLTK's broader language resources or later NLP processing.
+CANDIDATE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "he",
+        "her",
+        "him",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "me",
+        "of",
+        "on",
+        "or",
+        "our",
+        "she",
+        "that",
+        "the",
+        "their",
+        "them",
+        "they",
+        "this",
+        "to",
+        "we",
+        "with",
+        "you",
+        "your",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +70,7 @@ class AppSettings:
     minimum_sentence_characters: int = MINIMUM_SENTENCE_CHARACTERS
     target_chunk_size: int = TARGET_CHUNK_SIZE
     chunk_overlap_size: int = CHUNK_OVERLAP_SIZE
+    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
 
 
 def get_settings() -> AppSettings:
