@@ -1,6 +1,6 @@
 # QuestLLM
 
-## Live Demo
+### Live Demo
 [Open QuestLLM](https://questllm.streamlit.app/)
 
 QuestLLM is a local-first study tool that turns pasted text, text-based PDFs, or a selected
