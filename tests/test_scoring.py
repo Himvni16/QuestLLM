@@ -2,7 +2,7 @@
 
 from questllm.questions import AnswerChoice, Difficulty, Question, QuestionType
 from questllm.quiz import Quiz
-from questllm.scoring import AnswerStatus, score_question, score_quiz
+from questllm.scoring import AnswerStatus, QuizScore, score_question, score_quiz
 
 
 def _question(
@@ -28,6 +28,57 @@ def _question(
         paragraph_index=0,
         page_number=1,
         difficulty=Difficulty.EASY,
+    )
+
+
+def _quiz(*questions: Question) -> Quiz:
+    return Quiz(
+        id="quiz-1",
+        questions=questions,
+        requested_question_count=len(questions),
+        actual_question_count=len(questions),
+        selected_question_types=tuple(dict.fromkeys(q.question_type for q in questions)),
+        difficulty=Difficulty.EASY,
+        source_metadata={"source_type": "text"},
+        generation_seed=17,
+    )
+
+
+def _mixed_questions() -> tuple[Question, ...]:
+    return (
+        _question(
+            QuestionType.MULTIPLE_CHOICE,
+            identifier="mcq",
+            answer="chlorophyll",
+            choices=(
+                AnswerChoice("mcq-correct", "chlorophyll", True),
+                AnswerChoice("mcq-wrong", "mitochondria", False),
+                AnswerChoice("mcq-two", "ribosome", False),
+                AnswerChoice("mcq-three", "nucleus", False),
+            ),
+        ),
+        _question(
+            QuestionType.TRUE_FALSE,
+            identifier="tf",
+            answer="True",
+            boolean_answer=True,
+        ),
+        _question(
+            QuestionType.FILL_IN_THE_BLANK,
+            identifier="blank",
+            answer="DNA",
+        ),
+        _question(
+            QuestionType.SHORT_ANSWER,
+            identifier="short",
+            answer="cellular respiration",
+        ),
+    )
+
+
+def _assert_counts_partition_total(result: QuizScore) -> None:
+    assert result.correct_count + result.incorrect_count + result.unanswered_count == (
+        result.total_questions
     )
 
 
@@ -92,34 +143,75 @@ def test_short_answer_supports_exact_variants_and_conservative_token_overlap() -
     assert score_question(short_answer, "RNA").is_correct is False
 
 
-def test_overall_score_counts_unanswered_as_incorrect_and_breaks_down_types() -> None:
-    mcq = _question(
-        QuestionType.MULTIPLE_CHOICE,
-        identifier="mcq",
-        answer="chlorophyll",
-        choices=(
-            AnswerChoice("correct", "chlorophyll", True),
-            AnswerChoice("wrong", "mitochondria", False),
-            AnswerChoice("two", "ribosome", False),
-            AnswerChoice("three", "nucleus", False),
-        ),
+def test_six_question_summary_counts_unanswered_exclusively() -> None:
+    questions = tuple(
+        _question(
+            QuestionType.FILL_IN_THE_BLANK,
+            identifier=f"blank-{index}",
+            answer="DNA",
+        )
+        for index in range(6)
     )
-    blank = _question(QuestionType.FILL_IN_THE_BLANK, identifier="blank", answer="DNA")
-    quiz = Quiz(
-        id="quiz-1",
-        questions=(mcq, blank),
-        requested_question_count=2,
-        actual_question_count=2,
-        selected_question_types=(QuestionType.MULTIPLE_CHOICE, QuestionType.FILL_IN_THE_BLANK),
-        difficulty=Difficulty.EASY,
-        source_metadata={"source_type": "text"},
-        generation_seed=17,
+    answers = {f"blank-{index}": "DNA" for index in range(4)}
+    answers["blank-4"] = "RNA"
+
+    result = score_quiz(_quiz(*questions), answers)
+
+    assert result.correct_count == 4
+    assert result.incorrect_count == 1
+    assert result.unanswered_count == 1
+    assert result.total_questions == 6
+    assert result.percentage == 66.67
+    _assert_counts_partition_total(result)
+
+
+def test_all_unanswered_questions_do_not_increment_incorrect() -> None:
+    result = score_quiz(_quiz(*_mixed_questions()), {})
+
+    assert result.correct_count == 0
+    assert result.incorrect_count == 0
+    assert result.unanswered_count == result.total_questions == 4
+    assert result.percentage == 0.0
+    _assert_counts_partition_total(result)
+
+
+def test_all_incorrect_answered_questions_do_not_increment_unanswered() -> None:
+    result = score_quiz(
+        _quiz(*_mixed_questions()),
+        {
+            "mcq": "mcq-wrong",
+            "tf": False,
+            "blank": "RNA",
+            "short": "photosynthesis",
+        },
     )
 
-    result = score_quiz(quiz, {"mcq": "correct"})
+    assert result.correct_count == 0
+    assert result.incorrect_count == result.total_questions == 4
+    assert result.unanswered_count == 0
+    assert result.percentage == 0.0
+    _assert_counts_partition_total(result)
 
-    assert result.correct_count == 1
+
+def test_mixed_question_types_have_mutually_exclusive_overall_and_type_counts() -> None:
+    result = score_quiz(
+        _quiz(*_mixed_questions()),
+        {
+            "mcq": "mcq-correct",
+            "tf": False,
+            "short": "cellular respiration",
+        },
+    )
+
+    assert result.correct_count == 2
     assert result.incorrect_count == 1
     assert result.unanswered_count == 1
     assert result.percentage == 50.0
+    _assert_counts_partition_total(result)
+
+    assert result.by_type[QuestionType.MULTIPLE_CHOICE].correct == 1
+    assert result.by_type[QuestionType.TRUE_FALSE].incorrect == 1
     assert result.by_type[QuestionType.FILL_IN_THE_BLANK].unanswered == 1
+    assert result.by_type[QuestionType.SHORT_ANSWER].correct == 1
+    for type_score in result.by_type.values():
+        assert type_score.correct + type_score.incorrect + type_score.unanswered == type_score.total

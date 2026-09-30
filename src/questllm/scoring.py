@@ -137,26 +137,31 @@ def score_question(question: Question, user_answer: AnswerValue) -> QuestionScor
 
 
 def score_quiz(quiz: Quiz, answers: Mapping[str, AnswerValue]) -> QuizScore:
-    """Score all questions once; absent responses intentionally remain unanswered and incorrect."""
+    """Score all questions once and summarize mutually exclusive answer statuses."""
 
     results = tuple(
         score_question(question, answers.get(question.id)) for question in quiz.questions
     )
-    correct_count = sum(result.is_correct for result in results)
+    correct_count = sum(result.status is AnswerStatus.CORRECT for result in results)
+    incorrect_count = sum(result.status is AnswerStatus.INCORRECT for result in results)
     unanswered_count = sum(result.status is AnswerStatus.UNANSWERED for result in results)
-    incorrect_count = len(results) - correct_count
     by_type = {}
     for question_type in QuestionType:
         type_results = tuple(result for result in results if result.question_type is question_type)
         if type_results:
-            type_correct = sum(result.is_correct for result in type_results)
+            type_correct = sum(
+                result.status is AnswerStatus.CORRECT for result in type_results
+            )
+            type_incorrect = sum(
+                result.status is AnswerStatus.INCORRECT for result in type_results
+            )
             type_unanswered = sum(
                 result.status is AnswerStatus.UNANSWERED for result in type_results
             )
             by_type[question_type] = TypeScore(
                 total=len(type_results),
                 correct=type_correct,
-                incorrect=len(type_results) - type_correct,
+                incorrect=type_incorrect,
                 unanswered=type_unanswered,
             )
     percentage = round((correct_count / len(results) * 100) if results else 0.0, 2)
