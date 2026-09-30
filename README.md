@@ -92,7 +92,8 @@ python -m pip check
 python -m compileall -q app.py src tests
 ```
 
-The current suite contains 85 tests. Optional live checks are separate:
+The offline pytest suite covers the application and deployment helpers. Optional live checks are
+separate:
 
 ```powershell
 python scripts/smoke_test_model.py

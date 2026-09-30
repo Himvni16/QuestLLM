@@ -3,6 +3,7 @@
 import argparse
 import socket
 import sys
+import tempfile
 from pathlib import Path
 
 import nltk
@@ -19,14 +20,44 @@ _POS_TAGGER_RESOURCES = {
 }
 
 
-def nltk_data_directory() -> Path:
-    """Return the NLTK data directory owned by the active Python environment."""
+def _ensure_directory_is_writable(directory: Path) -> None:
+    """Create a directory and prove that the current process can write inside it."""
 
-    return Path(sys.prefix) / "nltk_data"
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryFile(dir=directory) as probe:
+        probe.write(b"questllm")
+        probe.flush()
+
+
+def _fallback_nltk_data_directory() -> Path:
+    """Return a portable, process-local fallback that may be ephemeral on hosted systems."""
+
+    return Path(tempfile.gettempdir()) / "questllm_nltk_data"
+
+
+def nltk_data_directory() -> Path:
+    """Return the first writable NLTK directory for the active runtime."""
+
+    environment_directory = Path(sys.prefix) / "nltk_data"
+    fallback_directory = _fallback_nltk_data_directory()
+    candidates = tuple(dict.fromkeys((environment_directory, fallback_directory)))
+    failures = []
+    for directory in candidates:
+        try:
+            _ensure_directory_is_writable(directory)
+        except OSError as error:
+            failures.append(f"{directory}: {error}")
+            continue
+        return directory
+
+    raise NltkResourceError(
+        "QuestLLM could not find a writable directory for NLTK resources. "
+        + " | ".join(failures)
+    )
 
 
 def configure_nltk_data_path() -> Path:
-    """Prioritize the active environment's NLTK directory without removing other paths."""
+    """Prioritize the selected writable NLTK directory without removing other paths."""
 
     data_directory = nltk_data_directory()
     directory_text = str(data_directory)
@@ -36,7 +67,7 @@ def configure_nltk_data_path() -> Path:
 
 
 def missing_punkt_resources() -> tuple[str, ...]:
-    """Return the Punkt packages unavailable in the local NLTK data directory."""
+    """Return the Punkt packages unavailable in the configured NLTK search paths."""
 
     configure_nltk_data_path()
     missing = []
@@ -61,7 +92,7 @@ def ensure_punkt_resources() -> None:
 
 
 def missing_pos_tagger_resources() -> tuple[str, ...]:
-    """Return the POS-tagger packages unavailable in the local NLTK data directory."""
+    """Return POS-tagger packages unavailable in the configured NLTK search paths."""
 
     configure_nltk_data_path()
     missing = []
@@ -123,7 +154,6 @@ def download_punkt_resources() -> None:
     """Download required Punkt packages when explicitly requested by a user or setup script."""
 
     data_directory = configure_nltk_data_path()
-    data_directory.mkdir(parents=True, exist_ok=True)
     for package_name in _missing_resources_in(data_directory, _PUNKT_RESOURCES):
         if not _download_package(package_name, data_directory):
             raise NltkResourceError(
@@ -138,7 +168,6 @@ def download_required_resources() -> None:
     """Download every missing QuestLLM NLTK package after explicit user approval."""
 
     data_directory = configure_nltk_data_path()
-    data_directory.mkdir(parents=True, exist_ok=True)
     resources = {**_PUNKT_RESOURCES, **_POS_TAGGER_RESOURCES}
     for package_name in _missing_resources_in(data_directory, resources):
         if not _download_package(package_name, data_directory):
