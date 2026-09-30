@@ -195,3 +195,78 @@ def test_empty_pool_and_missing_nltk_resource_are_handled_offline(
     monkeypatch.setattr(candidates, "ensure_pos_tagger_resources", raise_missing_resource)
     with pytest.raises(NltkResourceError, match="POS tagger"):
         extract_candidates((_sentence(0, "DNA is useful."),))
+
+
+def test_relation_candidates_prefer_complete_facts_across_domains(
+    patch_pos_tagger: None,
+) -> None:
+    sentences = (
+        _sentence(0, "Antibiotics are used to treat bacterial infections."),
+        _sentence(1, "Photosynthesis converts light energy into chemical energy."),
+        _sentence(2, "DNA stores genetic information."),
+    )
+
+    extracted = extract_candidates(sentences)
+    relation_candidates = {
+        candidate.text: candidate
+        for candidate in extracted
+        if candidate.candidate_type is CandidateType.RELATION_PHRASE
+    }
+
+    assert relation_candidates["bacterial infections"].subject == "Antibiotics"
+    assert relation_candidates["bacterial infections"].relation == "are"
+    assert relation_candidates["chemical energy"].subject == "Photosynthesis"
+    assert relation_candidates["chemical energy"].relation == "converts"
+    assert relation_candidates["genetic information"].subject == "DNA"
+    assert relation_candidates["genetic information"].relation == "stores"
+
+
+def test_supervised_learning_regression_keeps_task_phrase_not_embedded_spam(
+    patch_pos_tagger: None,
+) -> None:
+    sentences = (
+        _sentence(
+            0,
+            "Supervised Learning: The computer trains on labeled data that includes "
+            "correct answers.",
+        ),
+        _sentence(1, "It learns to predict outcomes for new data."),
+        _sentence(2, "A common task is classifying emails as spam or not spam."),
+    )
+
+    extracted = extract_candidates(sentences)
+    normalized = {candidate.normalized_text for candidate in extracted}
+    task = next(
+        candidate
+        for candidate in extracted
+        if candidate.text == "classifying emails as spam or not spam"
+    )
+
+    assert task.candidate_type is CandidateType.RELATION_PHRASE
+    assert task.subject == "Supervised Learning"
+    assert "spam" not in normalized
+
+
+@pytest.mark.parametrize(
+    ("framing", "answer"),
+    (
+        ("The goal is producing clean electricity", "producing clean electricity"),
+        ("An example is a solar panel", "a solar panel"),
+    ),
+)
+def test_generic_relation_framings_inherit_only_the_local_topic_subject(
+    patch_pos_tagger: None,
+    framing: str,
+    answer: str,
+) -> None:
+    sentences = (
+        _sentence(0, "Renewable Energy: It reduces dependence on fossil fuels."),
+        _sentence(1, f"{framing}."),
+        _sentence(2, "Unrelated Topic: It has a separate purpose.", paragraph_index=1),
+    )
+
+    candidate = next(
+        candidate for candidate in extract_candidates(sentences) if candidate.text == answer
+    )
+
+    assert candidate.subject == "Renewable Energy"

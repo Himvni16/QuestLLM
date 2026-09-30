@@ -84,13 +84,22 @@ def build_short_answer(
 ) -> Question | None:
     """Build a concise, answer-aware question from an already grounded T5 result."""
 
-    try:
-        prompt = validate_generated_question(stem.question, stem.candidate)
-    except GenerationError:
-        return None
+    candidate = stem.candidate
+    relation_prompts = {
+        "common task": f"What is a common task of {candidate.subject}?",
+        "stores": f"What does {candidate.subject} store?",
+        "converts": f"What does {candidate.subject} convert energy into?",
+        "are": f"What are {candidate.subject} used to treat?",
+    }
+    prompt = relation_prompts.get(candidate.relation or "") if candidate.subject else None
+    if prompt is None:
+        try:
+            prompt = validate_generated_question(stem.question, candidate)
+        except GenerationError:
+            return None
     return _make_question(
         question_type=QuestionType.SHORT_ANSWER,
-        candidate=stem.candidate,
+        candidate=candidate,
         prompt=prompt,
         difficulty=difficulty,
         metadata={"model_id": stem.model_id, "source": "t5"},

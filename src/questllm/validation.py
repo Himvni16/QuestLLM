@@ -53,6 +53,26 @@ def _has_answer_leakage(question: Question) -> bool:
     return bool(re.search(rf"(?<!\w){answer}(?!\w)", question.prompt, flags=re.IGNORECASE))
 
 
+def _has_question_answer_type_mismatch(question: Question) -> bool:
+    """Reject obvious wh-question/answer mismatches without semantic-model grading."""
+
+    prompt = normalize_question_text(question.prompt)
+    answer = normalize_question_text(question.correct_answer)
+    answer_terms = answer.split()
+    action_like = answer.startswith("to ") or any(term.endswith("ing") for term in answer_terms)
+    if ("what task" in prompt or "common task" in prompt) and not action_like:
+        return True
+    if ("purpose" in prompt or "goal" in prompt) and not action_like:
+        return True
+    if "how many" in prompt and not re.search(r"\d", answer):
+        return True
+    if prompt.startswith("who ") and not any(
+        token[:1].isupper() for token in question.correct_answer.split()
+    ):
+        return True
+    return False
+
+
 def validate_question(question: Question) -> QuestionValidation:
     """Apply common and type-specific quality rules without depending on Streamlit."""
 
@@ -76,6 +96,8 @@ def validate_question(question: Question) -> QuestionValidation:
         errors.append("Correct answer is not grounded in the recorded source sentence.")
     if _has_answer_leakage(question):
         errors.append("Question prompt directly reveals its expected answer.")
+    if _has_question_answer_type_mismatch(question):
+        errors.append("Question wording does not match the semantic type of its answer.")
 
     if question.question_type is QuestionType.MULTIPLE_CHOICE:
         normalized_choices = [normalize_question_text(choice.text) for choice in question.choices]

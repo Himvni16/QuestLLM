@@ -33,6 +33,7 @@ class CandidateType(StrEnum):
     QUANTITY_PERCENTAGE = "quantity/percentage"
     DEFINITION_TERM = "definition term"
     GENERAL_CONCEPT = "general concept"
+    RELATION_PHRASE = "relation phrase"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,8 @@ class CandidateAnswer:
     importance_score: float
     candidate_type: CandidateType
     frequency: int = 1
+    subject: str | None = None
+    relation: str | None = None
 
 
 _DEFINITION_PATTERN = re.compile(
@@ -80,6 +83,7 @@ _TYPE_BONUSES = {
     CandidateType.QUANTITY_PERCENTAGE: 0.12,
     CandidateType.NOUN_PHRASE: 0.06,
     CandidateType.GENERAL_CONCEPT: 0.0,
+    CandidateType.RELATION_PHRASE: 0.22,
 }
 _TYPE_PRIORITY = {
     CandidateType.DEFINITION_TERM: 6,
@@ -88,7 +92,35 @@ _TYPE_PRIORITY = {
     CandidateType.QUANTITY_PERCENTAGE: 4,
     CandidateType.NOUN_PHRASE: 3,
     CandidateType.GENERAL_CONCEPT: 2,
+    CandidateType.RELATION_PHRASE: 7,
 }
+_RELATION_PATTERNS = (
+    re.compile(
+        r"(?P<subject>[A-Z][\w -]{1,50}?)\s+(?P<relation>converts)\s+.+?\s+into\s+"
+        r"(?P<answer>[^.]+)",
+        re.I,
+    ),
+    re.compile(
+        r"(?P<subject>[A-Z][\w -]{1,50}?)\s+(?P<relation>stores|predicts|includes|performs)\s+"
+        r"(?P<answer>[^.]+)",
+        re.I,
+    ),
+    re.compile(
+        r"(?P<subject>[A-Z][\w -]{1,50}?)\s+(?P<relation>is|are)\s+used\s+to\s+\w+\s+"
+        r"(?P<answer>[^.]+)",
+        re.I,
+    ),
+    re.compile(
+        r"(?:a|an|the|one)\s+"
+        r"(?P<relation>common task|example|goal|purpose|use|benefit|function)\s+(?:of|is)\s+"
+        r"(?P<answer>[^.]+)",
+        re.I,
+    ),
+)
+_GENERIC_FRAMING_SUBJECT = re.compile(
+    r"^\s*(?:a|an|the|one)\s+(?:common task|goal|purpose|example|use|benefit|function)\b",
+    re.I,
+)
 
 
 def normalize_candidate(text: str) -> str:
@@ -102,7 +134,12 @@ def _candidate_tokens(text: str) -> tuple[str, ...]:
     return tuple(_WORD_PATTERN.findall(text))
 
 
-def _is_usable_candidate(text: str, sentence_text: str) -> bool:
+def _is_usable_candidate(
+    text: str,
+    sentence_text: str,
+    *,
+    maximum_tokens: int = MAXIMUM_CANDIDATE_TOKENS,
+) -> bool:
     """Reject weak fragments while preserving concise factual answers such as DNA and 5%."""
 
     normalized = normalize_candidate(text)
@@ -112,7 +149,7 @@ def _is_usable_candidate(text: str, sentence_text: str) -> bool:
         return False
     if len(normalized) < MINIMUM_CANDIDATE_CHARACTERS:
         return False
-    if len(normalized) > MAXIMUM_CANDIDATE_CHARACTERS or len(tokens) > MAXIMUM_CANDIDATE_TOKENS:
+    if len(normalized) > MAXIMUM_CANDIDATE_CHARACTERS or len(tokens) > maximum_tokens:
         return False
     if all(token.lower() in CANDIDATE_STOPWORDS for token in word_tokens):
         return False
@@ -124,9 +161,15 @@ def _make_candidate(
     text: str,
     sentence: ProcessedSentence,
     candidate_type: CandidateType,
+    *,
+    subject: str | None = None,
+    relation: str | None = None,
 ) -> CandidateAnswer | None:
     cleaned_text = " ".join(text.split()).strip(" ,;:-")
-    if not _is_usable_candidate(cleaned_text, sentence.text):
+    maximum_tokens = (
+        12 if candidate_type is CandidateType.RELATION_PHRASE else MAXIMUM_CANDIDATE_TOKENS
+    )
+    if not _is_usable_candidate(cleaned_text, sentence.text, maximum_tokens=maximum_tokens):
         return None
     return CandidateAnswer(
         text=cleaned_text,
@@ -137,6 +180,8 @@ def _make_candidate(
         page_number=sentence.page_number,
         importance_score=0.0,
         candidate_type=candidate_type,
+        subject=subject,
+        relation=relation,
     )
 
 
@@ -164,6 +209,49 @@ def _pattern_candidates(sentence: ProcessedSentence) -> list[CandidateAnswer]:
         if candidate:
             candidates.append(candidate)
     return candidates
+
+
+def _relation_candidates(
+    sentence: ProcessedSentence,
+    *,
+    contextual_subject: str | None,
+) -> list[CandidateAnswer]:
+    """Extract complete predicate/object spans before generic noun-token candidates."""
+
+    candidates = []
+    for pattern in _RELATION_PATTERNS:
+        for match in pattern.finditer(sentence.text):
+            answer = match.group("answer").strip(" ,;:-")
+            subject = match.groupdict().get("subject") or contextual_subject
+            candidate = _make_candidate(
+                answer,
+                sentence,
+                CandidateType.RELATION_PHRASE,
+                subject=subject.strip() if subject else None,
+                relation=match.group("relation").lower(),
+            )
+            if candidate:
+                candidates.append(candidate)
+    return candidates
+
+
+def _context_subject(sentence: ProcessedSentence) -> str | None:
+    """Conservatively recover a named heading or leading subject for nearby vague sentences."""
+
+    heading = re.match(r"^\s*([A-Z][A-Za-z0-9 -]{1,50}):", sentence.text)
+    if heading:
+        return heading.group(1).strip()
+    subject = re.match(
+        r"^\s*([A-Z][A-Za-z0-9 -]{1,50}?)\s+(?:is|are|uses|converts|stores)",
+        sentence.text,
+    )
+    return subject.group(1).strip() if subject else None
+
+
+def _is_generic_framing(sentence: ProcessedSentence) -> bool:
+    """Identify relation lead-ins that should inherit, rather than replace, a local topic."""
+
+    return bool(_GENERIC_FRAMING_SUBJECT.match(sentence.text))
 
 
 def _pos_candidates(sentence: ProcessedSentence) -> list[CandidateAnswer]:
@@ -201,6 +289,31 @@ def _pos_candidates(sentence: ProcessedSentence) -> list[CandidateAnswer]:
     return candidates
 
 
+def _remove_relation_fragments(candidates: list[CandidateAnswer]) -> list[CandidateAnswer]:
+    """Avoid ranking a noun embedded in a stronger relation answer as a separate fact."""
+
+    relation_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.candidate_type is CandidateType.RELATION_PHRASE
+    ]
+    retained = []
+    for candidate in candidates:
+        candidate_terms = set(candidate.normalized_text.split())
+        is_embedded_fragment = (
+            candidate.candidate_type in {CandidateType.GENERAL_CONCEPT, CandidateType.NOUN_PHRASE}
+            and len(candidate_terms) <= 2
+            and any(
+                candidate_terms < set(relation.normalized_text.split())
+                and candidate.sentence_index == relation.sentence_index
+                for relation in relation_candidates
+            )
+        )
+        if not is_embedded_fragment:
+            retained.append(candidate)
+    return retained
+
+
 def extract_candidates(sentences: tuple[ProcessedSentence, ...]) -> tuple[CandidateAnswer, ...]:
     """Extract unranked candidate phrases using transparent patterns and POS tags."""
 
@@ -209,11 +322,21 @@ def extract_candidates(sentences: tuple[ProcessedSentence, ...]) -> tuple[Candid
 
     ensure_pos_tagger_resources()
     candidates = []
+    contextual_subject: str | None = None
+    subject_paragraph: int | None = None
     for sentence in sentences:
+        explicit_subject = _context_subject(sentence)
+        if explicit_subject and not _is_generic_framing(sentence):
+            contextual_subject = explicit_subject
+            subject_paragraph = sentence.paragraph_index
+        local_subject = (
+            contextual_subject if subject_paragraph == sentence.paragraph_index else None
+        )
         candidates.extend(_definition_candidates(sentence))
         candidates.extend(_pattern_candidates(sentence))
+        candidates.extend(_relation_candidates(sentence, contextual_subject=local_subject))
         candidates.extend(_pos_candidates(sentence))
-    return tuple(candidates)
+    return tuple(_remove_relation_fragments(candidates))
 
 
 def _sentence_documents(candidates: tuple[CandidateAnswer, ...]) -> tuple[str, ...]:
