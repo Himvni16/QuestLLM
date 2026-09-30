@@ -17,6 +17,10 @@ class InsufficientTextError(IngestionError):
     """Raised when pasted content is too short to support a useful quiz."""
 
 
+class SourceTooLargeError(IngestionError):
+    """Raised when source content exceeds a deployment-safe processing limit."""
+
+
 class InvalidPdfError(IngestionError):
     """Raised when uploaded bytes are not a readable PDF."""
 
@@ -71,6 +75,10 @@ class ModelLoadError(QuestLLMError):
 
 class GenerationError(QuestLLMError):
     """Raised when a grounded question cannot be built or generated safely."""
+
+
+class ResourceLimitError(QuestLLMError):
+    """Raised when local or hosted compute cannot safely finish a request."""
 
 
 class WorkflowError(QuestLLMError):

@@ -1,2 +1,10 @@
-# Installs QuestLLM and its runtime dependencies from pyproject.toml.
+# Install the src-layout package, then keep every cloud runtime dependency explicit.
 -e .
+streamlit==1.64.0
+torch>=2.4,<3
+transformers>=4.47,<5
+sentencepiece>=0.2,<1
+nltk>=3.9,<4
+scikit-learn>=1.5,<2
+pypdf>=5,<7
+requests>=2.32,<3

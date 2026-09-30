@@ -6,9 +6,19 @@ from typing import BinaryIO
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from questllm.config import MINIMUM_TEXT_CHARACTERS
+from questllm.config import (
+    MAXIMUM_PDF_FILE_SIZE_BYTES,
+    MAXIMUM_PDF_PAGE_COUNT,
+    MAXIMUM_SOURCE_TEXT_CHARACTERS,
+    MINIMUM_TEXT_CHARACTERS,
+)
 from questllm.document import Document, DocumentPage, SourceType
-from questllm.exceptions import EncryptedPdfError, InvalidPdfError, NoUsablePdfTextError
+from questllm.exceptions import (
+    EncryptedPdfError,
+    InvalidPdfError,
+    NoUsablePdfTextError,
+    SourceTooLargeError,
+)
 from questllm.ingestion.text import normalize_text
 
 
@@ -35,11 +45,22 @@ def ingest_pdf(source: bytes | BinaryIO, *, filename: str | None = None) -> Docu
     content = _read_pdf_bytes(source)
     if not content or b"%PDF-" not in content[:1024]:
         raise InvalidPdfError("The uploaded file is not a valid PDF.")
+    if len(content) > MAXIMUM_PDF_FILE_SIZE_BYTES:
+        maximum_megabytes = MAXIMUM_PDF_FILE_SIZE_BYTES // (1024 * 1024)
+        raise SourceTooLargeError(
+            f"This PDF is too large for this deployment. Upload a file up to "
+            f"{maximum_megabytes} MB."
+        )
 
     try:
         reader = PdfReader(BytesIO(content))
         if reader.is_encrypted:
             raise EncryptedPdfError("Password-protected PDFs are not supported yet.")
+        if len(reader.pages) > MAXIMUM_PDF_PAGE_COUNT:
+            raise SourceTooLargeError(
+                f"This PDF has too many pages for this deployment. Upload up to "
+                f"{MAXIMUM_PDF_PAGE_COUNT} pages."
+            )
 
         pages = tuple(
             DocumentPage(
@@ -48,7 +69,7 @@ def ingest_pdf(source: bytes | BinaryIO, *, filename: str | None = None) -> Docu
             )
             for page_number, page in enumerate(reader.pages, start=1)
         )
-    except EncryptedPdfError:
+    except (EncryptedPdfError, SourceTooLargeError):
         raise
     except (OSError, PdfReadError, ValueError) as error:
         raise InvalidPdfError("QuestLLM could not read this PDF.") from error
@@ -58,6 +79,11 @@ def ingest_pdf(source: bytes | BinaryIO, *, filename: str | None = None) -> Docu
         raise NoUsablePdfTextError(
             "This PDF has little or no extractable text. It may be scanned or image-only; "
             "OCR is not available in this version of QuestLLM."
+        )
+    if len(extracted_text) > MAXIMUM_SOURCE_TEXT_CHARACTERS:
+        raise SourceTooLargeError(
+            f"This PDF contains too much extracted text for this deployment. Keep it under "
+            f"{MAXIMUM_SOURCE_TEXT_CHARACTERS:,} characters."
         )
 
     metadata = {"page_count": str(len(pages))}

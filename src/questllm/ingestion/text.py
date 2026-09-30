@@ -2,9 +2,9 @@
 
 import re
 
-from questllm.config import MINIMUM_TEXT_CHARACTERS
+from questllm.config import MAXIMUM_SOURCE_TEXT_CHARACTERS, MINIMUM_TEXT_CHARACTERS
 from questllm.document import Document, SourceType
-from questllm.exceptions import EmptyTextError, InsufficientTextError
+from questllm.exceptions import EmptyTextError, InsufficientTextError, SourceTooLargeError
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _HORIZONTAL_WHITESPACE = re.compile(r"[ \t]+")
@@ -41,6 +41,11 @@ def ingest_text(text: str) -> Document:
     if len(normalized) < MINIMUM_TEXT_CHARACTERS:
         raise InsufficientTextError(
             f"Provide at least {MINIMUM_TEXT_CHARACTERS} characters of readable text."
+        )
+    if len(normalized) > MAXIMUM_SOURCE_TEXT_CHARACTERS:
+        raise SourceTooLargeError(
+            f"Pasted text is too large for this deployment. Keep it under "
+            f"{MAXIMUM_SOURCE_TEXT_CHARACTERS:,} characters."
         )
 
     return Document(source_type=SourceType.TEXT, text=normalized)

@@ -9,12 +9,15 @@ from questllm.chunking import chunk_sentences, make_tokenizer_estimator
 from questllm.config import (
     APP_NAME,
     CHUNK_OVERLAP_SIZE,
+    MAXIMUM_PDF_FILE_SIZE_BYTES,
+    MAXIMUM_PDF_PAGE_COUNT,
     MAXIMUM_QUIZ_QUESTION_COUNT,
+    MAXIMUM_SOURCE_TEXT_CHARACTERS,
     MINIMUM_QUIZ_QUESTION_COUNT,
     MODEL_CONTEXT_TOKEN_BUDGET,
 )
 from questllm.document import Document
-from questllm.exceptions import QuestLLMError
+from questllm.exceptions import NltkResourceError, QuestLLMError, ResourceLimitError
 from questllm.generation import T5QuestionGenerator
 from questllm.ingestion import (
     TopicSearchResult,
@@ -23,6 +26,7 @@ from questllm.ingestion import (
     ingest_text,
 )
 from questllm.model_loader import load_question_generation_model
+from questllm.nltk_resources import initialize_runtime_resources
 from questllm.preprocessing import preprocess_document
 from questllm.questions import Difficulty, Question, QuestionType
 from questllm.quiz_assembly import QuizGenerationPipeline
@@ -321,12 +325,24 @@ def load_cached_question_generator() -> T5QuestionGenerator:
     return T5QuestionGenerator(load_question_generation_model())
 
 
+@st.cache_resource(show_spinner=False)
+def initialize_cached_nltk_resources() -> None:
+    """Prepare NLTK data once per app process and reuse it across Streamlit reruns."""
+
+    initialize_runtime_resources()
+
+
 def process_document(document: Document) -> None:
     """Run downstream preparation once and retain it only in create state."""
 
-    sentences = preprocess_document(document)
-    chunks = chunk_sentences(sentences)
-    candidates = extract_and_rank_candidates(sentences)
+    try:
+        sentences = preprocess_document(document)
+        chunks = chunk_sentences(sentences)
+        candidates = extract_and_rank_candidates(sentences)
+    except MemoryError as error:
+        raise ResourceLimitError(
+            "QuestLLM ran out of memory while processing this source. Try a smaller document."
+        ) from error
     st.session_state["processed_content"] = (document, sentences, chunks, candidates)
 
 
@@ -644,6 +660,7 @@ def render_create(workflow: QuizWorkflow) -> None:
             label_visibility="collapsed",
         )
         st.caption("Use clear, factual text for the strongest questions.")
+        st.caption(f"Deployment limit: {MAXIMUM_SOURCE_TEXT_CHARACTERS:,} characters.")
         process_button_type = "secondary" if source_is_ready else "primary"
         if st.button("PROCESS TEXT", type=process_button_type, use_container_width=True):
             try:
@@ -656,7 +673,11 @@ def render_create(workflow: QuizWorkflow) -> None:
             type=["pdf"],
             label_visibility="collapsed",
         )
-        st.caption("Text-based PDFs work best. Scanned images may not contain extractable text.")
+        maximum_pdf_megabytes = MAXIMUM_PDF_FILE_SIZE_BYTES // (1024 * 1024)
+        st.caption(
+            "Text-based PDFs work best. Scanned images may not contain extractable text. "
+            f"Limit: {maximum_pdf_megabytes} MB, {MAXIMUM_PDF_PAGE_COUNT} pages."
+        )
         process_button_type = "secondary" if source_is_ready else "primary"
         if st.button("PROCESS PDF", type=process_button_type, use_container_width=True):
             if uploaded_pdf is None:
@@ -738,7 +759,10 @@ def render_create(workflow: QuizWorkflow) -> None:
             )
             generator = None
             quiz_chunks = chunks
-            with st.spinner("Building your quiz… this can take longer on CPU."):
+            with st.spinner(
+                "Building your quiz… the first model download is about 900 MB, and CPU "
+                "generation can take several minutes."
+            ):
                 if needs_t5_stems:
                     generator = load_cached_question_generator()
                     tokenizer_estimator = make_tokenizer_estimator(generator.tokenizer)
@@ -768,6 +792,18 @@ def render_create(workflow: QuizWorkflow) -> None:
                 "Quiz generation could not be completed with these settings. "
                 "Try fewer questions or a different source."
             )
+
+
+try:
+    with st.spinner("Preparing language resources…"):
+        initialize_cached_nltk_resources()
+except NltkResourceError:
+    render_brand()
+    st.error(
+        "QuestLLM could not prepare its language resources. Refresh to retry. If the problem "
+        "continues, ask the app owner to check the deployment network and logs."
+    )
+    st.stop()
 
 
 workflow = get_workflow(st.session_state)

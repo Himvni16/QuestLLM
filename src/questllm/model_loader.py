@@ -36,17 +36,24 @@ def load_question_generation_model(
         model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         model.to(device)
         model.eval()
-    except (OSError, RuntimeError, ValueError) as error:
+    except (MemoryError, OSError, RuntimeError, ValueError) as error:
         message = str(error).lower()
-        if "out of memory" in message:
-            detail = "QuestLLM ran out of memory while loading the question-generation model."
+        if isinstance(error, MemoryError) or "out of memory" in message:
+            detail = (
+                "QuestLLM ran out of memory while loading the question-generation model. "
+                "The host may need to be restarted before trying a smaller quiz."
+            )
         elif "connection" in message or "network" in message or "download" in message:
             detail = (
-                "QuestLLM could not download the question-generation model. Check your connection."
+                "QuestLLM could not download the question-generation model. "
+                "Check the host's internet connection and try again."
             )
         else:
-            detail = "QuestLLM could not load the local question-generation model or tokenizer."
-        raise ModelLoadError(f"{detail} Details: {error}") from error
+            detail = (
+                "QuestLLM could not load the question-generation model or tokenizer. "
+                "Try again shortly or ask the app owner to check the deployment logs."
+            )
+        raise ModelLoadError(detail) from error
 
     return LoadedQuestionGenerationModel(
         tokenizer=tokenizer,

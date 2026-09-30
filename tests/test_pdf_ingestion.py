@@ -6,7 +6,13 @@ import pytest
 from pypdf import PdfWriter
 
 from questllm.document import SourceType
-from questllm.exceptions import EncryptedPdfError, InvalidPdfError, NoUsablePdfTextError
+from questllm.exceptions import (
+    EncryptedPdfError,
+    InvalidPdfError,
+    NoUsablePdfTextError,
+    SourceTooLargeError,
+)
+from questllm.ingestion import pdf as pdf_ingestion
 from questllm.ingestion.pdf import ingest_pdf
 
 
@@ -129,3 +135,27 @@ def test_ingest_pdf_rejects_encrypted_content() -> None:
 
     with pytest.raises(EncryptedPdfError):
         ingest_pdf(encrypted_pdf.getvalue())
+
+
+def test_ingest_pdf_rejects_files_over_the_byte_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    content = _make_text_pdf(
+        ["This PDF has enough extracted text to support a later quiz generation step."]
+    )
+    monkeypatch.setattr(pdf_ingestion, "MAXIMUM_PDF_FILE_SIZE_BYTES", len(content) - 1)
+
+    with pytest.raises(SourceTooLargeError, match="too large"):
+        ingest_pdf(content)
+
+
+def test_ingest_pdf_rejects_files_over_the_page_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pdf_ingestion, "MAXIMUM_PDF_PAGE_COUNT", 1)
+
+    with pytest.raises(SourceTooLargeError, match="too many pages"):
+        ingest_pdf(
+            _make_text_pdf(
+                [
+                    "The first page contains enough readable source text for a quiz.",
+                    "The second page also contains enough readable source text for a quiz.",
+                ]
+            )
+        )

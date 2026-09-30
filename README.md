@@ -50,8 +50,9 @@ python -m streamlit run app.py
 ```
 
 The NLTK setup command stores `punkt`, `punkt_tab`, and
-`averaged_perceptron_tagger_eng` in the active virtual environment. It is explicit by design:
-QuestLLM never downloads NLP data during a normal app run.
+`averaged_perceptron_tagger_eng` in the active virtual environment. This explicit setup remains the
+recommended local workflow. If any resource is missing when Streamlit starts, the app downloads it
+once and caches the successful initialization for the lifetime of that app process.
 
 ## First model download
 
@@ -59,6 +60,26 @@ On the first quiz generation that needs T5, QuestLLM downloads
 [`valhalla/t5-base-qa-qg-hl`](https://huggingface.co/valhalla/t5-base-qa-qg-hl) into the local
 Hugging Face cache. The model is large enough that the first run may take time depending on network
 speed; later runs reuse the cache. CUDA is used when available, otherwise generation runs on CPU.
+
+## Deploy on Streamlit Community Cloud
+
+1. Push the repository to GitHub.
+2. Open [Streamlit Community Cloud](https://share.streamlit.io/).
+3. Sign in with GitHub.
+4. Create a new app.
+5. Select:
+   - repository: `Himvni16/QuestLLM`
+   - branch: `main`
+   - main file: `app.py`
+6. In Advanced settings, select Python `3.11` to match the project's tested local environment.
+   No secrets are required.
+7. Deploy.
+
+The first T5 model load downloads an approximately 900 MB checkpoint and may take several minutes.
+Later requests in the same running app process reuse Streamlit's cached model and Hugging Face's
+on-disk cache. Topic mode needs outbound internet access for Wikipedia. Free-tier memory and CPU
+can limit very large documents or quizzes, so QuestLLM caps pasted/article text at 50,000
+characters, PDFs at 10 MB and 50 pages, and quizzes at 12 questions.
 
 ## Testing and smoke checks
 
@@ -71,7 +92,7 @@ python -m pip check
 python -m compileall -q app.py src tests
 ```
 
-The current suite contains 73 tests. Optional live checks are separate:
+The current suite contains 85 tests. Optional live checks are separate:
 
 ```powershell
 python scripts/smoke_test_model.py
@@ -84,6 +105,8 @@ python scripts/smoke_test_topic.py Photosynthesis
 - Topic mode sends the entered query to Wikipedia/MediaWiki and retrieves the article the learner
   selects. The resulting quiz keeps the article title and URL as provenance.
 - Hugging Face internet access is needed only when the T5 model is not already cached.
+- QuestLLM does not require API keys or other secrets. Wikipedia/MediaWiki access is
+  unauthenticated.
 
 ## Limitations
 

@@ -151,6 +151,13 @@ def download_required_resources() -> None:
     ensure_pos_tagger_resources()
 
 
+def initialize_runtime_resources() -> None:
+    """Ensure app resources once, downloading only packages that are genuinely missing."""
+
+    if missing_required_resources():
+        download_required_resources()
+
+
 def main() -> None:
     """Provide an explicit command-line setup path for QuestLLM NLTK resources."""
 
